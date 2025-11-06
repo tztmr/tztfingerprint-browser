@@ -32,3 +32,4 @@
 31 备注：当前为测试阶段，Windows 用户可直接运行后端并使用本机浏览器；如未安装，将自动使用打包内置浏览器（若存在）。# adweb git init git add read.md git commit -m first commit git branch -M main git remote add origin https://github.com/tztmr/adweb.git git push -u origin main
 # adweb
 # adweb
+# adsizeweb
