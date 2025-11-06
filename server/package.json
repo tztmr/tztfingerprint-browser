@@ -1,0 +1,19 @@
+{
+  "name": "webset-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node index.js",
+    "bundle:chrome": "node scripts/bundle-chrome.js",
+    "package:zip": "node scripts/build-and-zip.js"
+  },
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "chrome-launcher": "^0.15.2",
+    "chrome-remote-interface": "^0.33.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "uuid": "^9.0.1"
+  }
+}
