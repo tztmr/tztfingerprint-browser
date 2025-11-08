@@ -46,6 +46,12 @@ jobs:
           npm install --no-audit --no-fund
           npm run vendor:chromium
 
+      - name: Copy server into src-tauri (Windows)
+        shell: powershell
+        run: |
+          if (Test-Path src-tauri/server) { Remove-Item -Recurse -Force src-tauri/server }
+          Copy-Item -Recurse -Force server src-tauri/
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -122,6 +128,11 @@ jobs:
         run: |
           npm install --prefix server --no-audit --no-fund
           npm run vendor:chromium --prefix server
+
+      - name: Copy server into src-tauri (macOS)
+        run: |
+          rm -rf src-tauri/server
+          cp -R server src-tauri/server
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
