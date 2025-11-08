@@ -13,5 +13,12 @@ export default defineConfig({
         changeOrigin: true
       }
     }
+  },
+  build: {
+    sourcemap: false,
+    minify: 'esbuild'
+  },
+  esbuild: {
+    drop: ['console', 'debugger']
   }
 })

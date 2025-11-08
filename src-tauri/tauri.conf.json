@@ -10,7 +10,9 @@
     "frontendDist": "../ui/dist"
   },
   "app": {
-    "security": { "csp": null },
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' http://localhost:4000 ws://localhost:4000; frame-src 'none'; object-src 'none'; base-uri 'self'"
+    },
     "windows": [
       {
         "title": "TZT指纹浏览器",
