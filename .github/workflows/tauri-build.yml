@@ -39,6 +39,13 @@ jobs:
           cd ui
           npm install --no-audit --no-fund
 
+      - name: Bundle browser into server/vendor (Windows)
+        shell: powershell
+        run: |
+          cd server
+          npm install --no-audit --no-fund
+          npm run bundle:chrome || echo "bundle:chrome failed; will rely on local browsers"
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -110,6 +117,11 @@ jobs:
 
       - name: Install UI deps
         run: npm install --prefix ui
+
+      - name: Bundle browser into server/vendor (macOS)
+        run: |
+          npm install --prefix server --no-audit --no-fund
+          npm run bundle:chrome --prefix server || echo "bundle:chrome failed; will rely on local browsers"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TZT指纹浏览器",
+  "productName": "TZT指纹浏览器 版本V0.1.8",
   "version": "0.1.8",
   "identifier": "com.tzt.browser",
   "build": {
@@ -25,6 +25,9 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "dmg"],
+    "resources": [
+      "../server/**"
+    ],
     "icon": [
       "icons/icon.icns",
       "icons/icon.ico",
