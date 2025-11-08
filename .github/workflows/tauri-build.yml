@@ -21,13 +21,23 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '18'
 
       - name: Install root deps (CLI)
         run: npm ci
 
+      - name: Configure npm registry for UI (Windows)
+        shell: powershell
+        run: |
+          cd ui
+          npm config set registry https://registry.npmjs.org
+          npm config get registry
+
       - name: Install UI deps
-        run: npm install --prefix ui
+        shell: powershell
+        run: |
+          cd ui
+          npm install --no-audit --no-fund
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
