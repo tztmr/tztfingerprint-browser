@@ -27,7 +27,7 @@ jobs:
         run: npm ci
 
       - name: Install UI deps
-        run: npm ci --prefix ui
+        run: npm install --prefix ui
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -99,7 +99,7 @@ jobs:
         run: npm ci
 
       - name: Install UI deps
-        run: npm ci --prefix ui
+        run: npm install --prefix ui
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
