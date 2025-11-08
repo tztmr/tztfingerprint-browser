@@ -4,6 +4,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { createSocks5Forwarder } from './socks5-forwarder.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -16,13 +17,19 @@ export const defaultFingerprint = {
   timezoneId: 'Asia/Shanghai',
   languages: ['zh-CN', 'zh'],
   platform: 'MacIntel',
+  uaPlatform: 'macOS',
   hardwareConcurrency: 8,
   deviceMemory: 8,
   vendor: 'Google Inc.',
   renderer: 'ANGLE (Apple, Apple M2, Metal)',
+  productSub: '20030107',
+  maxTouchPoints: 0,
   noiseCanvas: true,
   noiseWebGL: true,
   spoofPlugins: true,
+  audioNoise: true,
+  connection: { effectiveType: '4g', rtt: 50, downlink: 10, saveData: false },
+  userAgentBrands: null,
   userAgent: null,
   webrtcPolicy: 'disable_non_proxied_udp'
 }
@@ -34,6 +41,10 @@ function stealthInitSource(fp) {
     def(navigator, 'languages', ${JSON.stringify(fp.languages)})
     def(navigator, 'language', ${JSON.stringify(fp.languages[0])})
     def(navigator, 'platform', ${JSON.stringify(fp.platform)})
+    def(navigator, 'userAgent', ${JSON.stringify(fp.userAgent || '')})
+    def(navigator, 'vendor', ${JSON.stringify(fp.vendor)})
+    def(navigator, 'productSub', ${JSON.stringify(fp.productSub)})
+    def(navigator, 'maxTouchPoints', ${JSON.stringify(fp.maxTouchPoints)})
     def(navigator, 'hardwareConcurrency', ${JSON.stringify(fp.hardwareConcurrency)})
     def(navigator, 'deviceMemory', ${JSON.stringify(fp.deviceMemory)})
     if (!window.chrome) window.chrome = { runtime: {} }
@@ -100,12 +111,81 @@ function stealthInitSource(fp) {
         }
       }
     }
+    if (${fp.audioNoise ? 'true' : 'false'}) {
+      const AB = window.AudioBuffer && window.AudioBuffer.prototype
+      if (AB && AB.getChannelData) {
+        const orig = AB.getChannelData
+        AB.getChannelData = function () {
+          const data = orig.apply(this, arguments)
+          const len = Math.min(50, data ? data.length : 0)
+          for (let i = 0; i < len; i++) data[i] += 1e-7
+          return data
+        }
+      }
+    }
+    // Patch Intl locale/timezone resolution to align
+    try {
+      const origResolved = Intl.DateTimeFormat.prototype.resolvedOptions
+      Intl.DateTimeFormat.prototype.resolvedOptions = function () {
+        const r = origResolved.call(new Intl.DateTimeFormat(${JSON.stringify(fp.locale)}))
+        r.locale = ${JSON.stringify(fp.locale)}
+        r.timeZone = ${JSON.stringify(fp.timezoneId)}
+        return r
+      }
+    } catch (e) {}
+    // Patch userAgentData for UA-CH consistency
+    try {
+      const brands = ${JSON.stringify(fp.userAgentBrands || [])}
+      const platform = ${JSON.stringify(fp.uaPlatform)}
+      const mobile = false
+      const uaData = {
+        brands,
+        mobile,
+        platform,
+        getHighEntropyValues: async (hints) => {
+          const out = { brands, mobile, platform }
+          if (Array.isArray(hints)) {
+            for (const h of hints) {
+              if (h === 'architecture') out.architecture = 'arm'
+              if (h === 'model') out.model = ''
+              if (h === 'platformVersion') out.platformVersion = '14'
+              if (h === 'uaFullVersion') out.uaFullVersion = brands?.[1]?.version || '120.0.0.0'
+              if (h === 'bitness') out.bitness = '64'
+            }
+          }
+          return out
+        }
+      }
+      if (!navigator.userAgentData) {
+        def(navigator, 'userAgentData', uaData)
+      } else {
+        try { Object.assign(navigator.userAgentData, uaData) } catch (_) {}
+      }
+    } catch (e) {}
+    // Network Information API
+    try {
+      const conn = ${JSON.stringify(fp.connection || {})}
+      if (conn && Object.keys(conn).length) {
+        const api = {
+          effectiveType: conn.effectiveType || '4g',
+          rtt: conn.rtt || 50,
+          downlink: conn.downlink || 10,
+          saveData: !!conn.saveData,
+          onchange: null,
+          addEventListener: () => {},
+          removeEventListener: () => {}
+        }
+        def(navigator, 'connection', api)
+      }
+    } catch (e) {}
   })();`
 }
 
-function proxyFlag(proxy) {
-  if (!proxy || !proxy.host || !proxy.port) return null
-  return `--proxy-server=socks5://${proxy.host}:${proxy.port}`
+function proxyFlagFromHostPort(host, port) {
+  if (!host || !port) return null
+  // 为确保对所有浏览器变体兼容，使用通用的 socks5 方案
+  // 注：这将使用本地解析 DNS；我们通过始终使用本地转发器来兼容需要鉴权的上游
+  return `--proxy-server=socks5://${host}:${port}`
 }
 
 function findLocalChrome() {
@@ -186,16 +266,41 @@ function findBundledChrome() {
 export async function openSession(profile) {
   if (sessions[profile.id]) return sessions[profile.id]
   const fpRaw = { ...defaultFingerprint, ...(profile.fingerprint || {}) }
-  const fp = { ...fpRaw, userAgent: fpRaw.userAgent && fpRaw.userAgent.includes('HeadlessChrome/') ? fpRaw.userAgent.replace('HeadlessChrome/', 'Chrome/') : fpRaw.userAgent }
+  // Apply stealth level overrides without changing persisted fingerprint surface
+  const level = (profile.preferred && profile.preferred.stealth) ? String(profile.preferred.stealth).toLowerCase() : null
+  const stealthPrefs = (() => {
+    if (level === 'light') return { noiseCanvas: false, noiseWebGL: false, audioNoise: false, spoofPlugins: false }
+    if (level === 'standard') return { noiseCanvas: true, noiseWebGL: true, audioNoise: false, spoofPlugins: true }
+    if (level === 'heavy') return { noiseCanvas: true, noiseWebGL: true, audioNoise: true, spoofPlugins: true }
+    return {}
+  })()
+  const fpMerged = { ...fpRaw, ...stealthPrefs }
+  const fp = { ...fpMerged, userAgent: fpMerged.userAgent && fpMerged.userAgent.includes('HeadlessChrome/') ? fpMerged.userAgent.replace('HeadlessChrome/', 'Chrome/') : fpMerged.userAgent }
   const flags = [
     `--user-data-dir=${profile.userDataDir}`,
     `--lang=${fp.locale}`,
     `--force-webrtc-ip-handling-policy=${fp.webrtcPolicy}`,
+    '--disable-quic',
+    '--proxy-bypass-list=<-loopback>',
     '--no-first-run',
     '--no-default-browser-check'
   ]
-  const pflag = proxyFlag(profile.proxy)
-  if (pflag) flags.push(pflag)
+  // 始终通过本地 SOCKS5 转发器桥接到上游代理，确保支持鉴权且兼容各浏览器
+  let forwarder = null
+  const { proxy } = profile || {}
+  if (proxy && proxy.host && proxy.port) {
+    forwarder = await createSocks5Forwarder({
+      upstreamHost: proxy.host,
+      upstreamPort: Number(proxy.port),
+      username: proxy.username || null,
+      password: proxy.password || null,
+      bindHost: '127.0.0.1',
+      bindPort: 0,
+      timeoutMs: 15000
+    })
+    const pflag = proxyFlagFromHostPort('127.0.0.1', forwarder.port)
+    if (pflag) flags.push(pflag)
+  }
   const chosenPath = process.env.CHROME_PATH || findLocalChrome() || findBundledChrome()
   let chrome
   try {
@@ -209,7 +314,7 @@ export async function openSession(profile) {
   }
   const port = chrome.port
   const browser = await CDP({ port })
-  sessions[profile.id] = { chrome, port, browser, fingerprint: fp }
+  sessions[profile.id] = { chrome, port, browser, fingerprint: fp, forwarder, netLogs: [] }
   return makeContext(profile.id)
 }
 
@@ -234,11 +339,40 @@ function makeContext(id) {
       const page = await CDP({ port, target: targetId })
       await page.Page.enable()
       await page.Network.enable()
-      // Align Accept-Language header with fingerprint.languages
+      // capture network diagnostics for troubleshooting
+      try {
+        const sess = sessions[id]
+        const logs = sess.netLogs || (sess.netLogs = [])
+        const push = (type, payload) => {
+          logs.push({ ts: Date.now(), type, payload })
+          if (logs.length > 200) logs.shift()
+        }
+        page.on('Network.requestWillBeSent', (p) => {
+          const { requestId, request, type } = p || {}
+          push('request', { requestId, url: request?.url, method: request?.method, type })
+        })
+        page.on('Network.responseReceived', (p) => {
+          const { requestId, response, type } = p || {}
+          push('response', { requestId, url: response?.url, status: response?.status, mimeType: response?.mimeType, type })
+        })
+        page.on('Network.loadingFailed', (p) => {
+          const { requestId, errorText, canceled, type } = p || {}
+          push('failed', { requestId, errorText, canceled, type })
+        })
+      } catch {}
+      // Align Accept-Language + UA-CH headers with fingerprint
       try {
         const langs = Array.isArray(fingerprint.languages) ? fingerprint.languages : [fingerprint.locale]
-        const header = langs.map((l, i) => i === 0 ? l : `${l};q=${(0.9 - i * 0.1).toFixed(1)}`).join(',')
-        await page.Network.setExtraHTTPHeaders({ headers: { 'Accept-Language': header } })
+        const acceptLang = langs.map((l, i) => i === 0 ? l : `${l};q=${(0.9 - i * 0.1).toFixed(1)}`).join(',')
+        const headers = { 'Accept-Language': acceptLang }
+        const brands = fingerprint.userAgentBrands
+        if (brands && brands.length) {
+          const secUa = brands.map(b => `"${b.brand}";v="${b.version}"`).join(', ')
+          headers['sec-ch-ua'] = secUa
+          headers['sec-ch-ua-platform'] = `"${fingerprint.uaPlatform || 'macOS'}"`
+          headers['sec-ch-ua-mobile'] = '?0'
+        }
+        await page.Network.setExtraHTTPHeaders({ headers })
       } catch {}
       if (fingerprint.userAgent) {
         await page.Emulation.setUserAgentOverride({ userAgent: fingerprint.userAgent, platform: fingerprint.platform })
@@ -300,6 +434,7 @@ export async function closeSession(id) {
   if (!sess) return
   try { await sess.browser.close() } catch {}
   await sess.chrome.kill()
+  try { if (sess.forwarder && typeof sess.forwarder.close === 'function') sess.forwarder.close() } catch {}
   delete sessions[id]
 }
 

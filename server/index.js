@@ -5,11 +5,12 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import fs from 'fs'
 import os from 'os'
+import crypto from 'crypto'
 import dns from 'dns/promises'
 import { v4 as uuidv4 } from 'uuid'
-// 切换到 Playwright 版以支持 socks5 用户名/密码代理
+// 使用 CDP + 本地 SOCKS5 转发器支持用户名/密码代理
 import { openSession, closeSession, sessions, getContext, getChromeInfo } from './lib/cdp.js'
-import { execSync } from 'child_process'
+import { execSync, execFile } from 'child_process'
 import net from 'net'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -18,14 +19,14 @@ const __dirname = path.dirname(__filename)
 const app = express()
 app.use(cors())
 // 提升全局 JSON 解析上限，避免导入上传体积较大时被默认 2MB 限制拦截
-app.use(bodyParser.json({ limit: '200mb' }))
+app.use(bodyParser.json({ limit: '800mb' }))
 // 统一返回 JSON 错误（包括 bodyParser 的解析错误，如实体过大）
 app.use((err, req, res, next) => {
   if (!err) return next()
   const status = err.status || err.statusCode || 400
   const type = err.type || ''
   if (type === 'entity.too.large') {
-    return res.status(413).json({ error: '请求体过大', limit: '200mb' })
+    return res.status(413).json({ error: '请求体过大', limit: '800mb' })
   }
   res.status(status).json({ error: err.message || String(err) })
 })
@@ -41,6 +42,58 @@ if (!fs.existsSync(exportRoot)) fs.mkdirSync(exportRoot, { recursive: true })
 
 function readProfiles() {
   return JSON.parse(fs.readFileSync(profilesFile, 'utf-8'))
+}
+
+// execFile 已通过 ES Module 方式导入
+
+// 查找桌面目录（存在才返回），不创建
+function findDesktopDir() {
+  const home = os.homedir()
+  const candidates = []
+  if (process.platform === 'win32') {
+    candidates.push(path.join(home, 'OneDrive', 'Desktop'))
+    candidates.push(path.join(home, 'Desktop'))
+    candidates.push(path.join(home, '桌面'))
+  } else if (process.platform === 'darwin') {
+    candidates.push(path.join(home, 'Desktop'))
+  } else {
+    candidates.push(path.join(home, 'Desktop'))
+  }
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p
+  }
+  return null
+}
+
+// 弹出系统目录选择框（macOS 使用 osascript；Windows 使用 PowerShell）
+function chooseFolderViaOS(promptText = '请选择导出目录') {
+  return new Promise((resolve) => {
+    const platform = process.platform
+    if (platform === 'darwin') {
+      const script = `POSIX path of (choose folder with prompt \"${String(promptText).replace(/"/g, '\\"')}\" default location path to desktop folder)`
+      execFile('osascript', ['-e', script], { encoding: 'utf8' }, (err, stdout) => {
+        if (err) return resolve(null)
+        const out = (stdout || '').trim()
+        resolve(out || null)
+      })
+    } else if (platform === 'win32') {
+      const psScript = [
+        'Add-Type -AssemblyName System.Windows.Forms;',
+        '$f = New-Object System.Windows.Forms.FolderBrowserDialog;',
+        `$f.Description = "${String(promptText).replace(/"/g, '`"')}";`,
+        '$f.ShowNewFolderButton = $true;',
+        'if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }'
+      ].join(' ')
+      execFile('powershell', ['-NoProfile', '-Command', psScript], { encoding: 'utf8' }, (err, stdout) => {
+        if (err) return resolve(null)
+        const out = (stdout || '').trim()
+        resolve(out || null)
+      })
+    } else {
+      // 其他平台暂不支持原生弹窗
+      resolve(null)
+    }
+  })
 }
 
 function writeProfiles(list) {
@@ -87,6 +140,61 @@ function pickNearby(value, choices) {
   // small randomness among close values
   const neighbors = choices.filter(c => Math.abs(c - value) <= 2)
   return neighbors.length ? neighbors[Math.floor(Math.random() * neighbors.length)] : best
+}
+
+// 计算机器码（HWID）：优先使用 macOS 的 IOPlatformUUID（稳定且与 Tauri machine_uid 一致）
+function computeHWID() {
+  // macOS: use IOPlatformUUID
+  if (process.platform === 'darwin') {
+    try {
+      const out = execSync("ioreg -rd1 -c IOPlatformExpertDevice | awk '/IOPlatformUUID/{print $3}' | tr -d '\"'", { stdio: ['ignore', 'pipe', 'ignore'] })
+        .toString()
+        .trim()
+      if (out) return out
+    } catch {}
+    // Fallback: system_profiler (slower)
+    try {
+      const sp = execSync("system_profiler SPHardwareDataType | awk -F': ' '/Hardware UUID/{print $2}'", { stdio: ['ignore', 'pipe', 'ignore'] })
+        .toString()
+        .trim()
+      if (sp) return sp
+    } catch {}
+  }
+
+  // Windows: use MachineGuid from registry (stable identifier used by Tauri machine_uid)
+  if (process.platform === 'win32') {
+    try {
+      const out = execSync('reg query "HKLM\\SOFTWARE\\Microsoft\\Cryptography" /v MachineGuid', { stdio: ['ignore', 'pipe', 'ignore'] })
+        .toString()
+      const m = /MachineGuid\s+REG_[A-Z]+\s+([^\r\n]+)/i.exec(out)
+      const guid = (m && m[1] ? m[1].trim() : '')
+      if (guid) return guid
+    } catch {}
+    try {
+      const ps = execSync("powershell -NoProfile -Command \"(Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography' -Name MachineGuid).MachineGuid\"", { stdio: ['ignore', 'pipe', 'ignore'] })
+        .toString()
+        .trim()
+      if (ps) return ps
+    } catch {}
+  }
+
+  // Generic fallback: hash hostname + platform + arch + stable NIC MACs
+  const hostname = os.hostname()
+  const platform = os.platform()
+  const arch = os.arch()
+  const nics = os.networkInterfaces()
+  const macs = []
+  for (const [name, arr] of Object.entries(nics)) {
+    for (const it of arr || []) {
+      const mac = (it && it.mac) || ''
+      // exclude invalid and internal; normalize & sort for stability
+      if (mac && mac !== '00:00:00:00:00:00' && !it.internal) macs.push(mac.toLowerCase())
+    }
+  }
+  macs.sort()
+  const basis = [hostname, platform, arch, ...macs].join('|')
+  const digest = crypto.createHash('sha256').update(basis).digest('hex')
+  return digest.slice(0, 32)
 }
 
 async function generateFingerprint(reqProxy, preferred) {
@@ -203,6 +311,7 @@ async function generateFingerprint(reqProxy, preferred) {
   // platform by OS
   const plt = os.platform()
   const platform = plt === 'darwin' ? 'MacIntel' : plt === 'win32' ? 'Win32' : 'Linux x86_64'
+  const uaPlatform = plt === 'darwin' ? 'macOS' : plt === 'win32' ? 'Windows' : 'Linux'
 
   // hardware concurrency & device memory (plausible stable values)
   const cpuCount = (os.cpus() || []).length || 8
@@ -223,24 +332,52 @@ async function generateFingerprint(reqProxy, preferred) {
     }
   } catch {}
 
+  // Build UA-CH brands from UA
+  let userAgentBrands = null
+  try {
+    const m = /Chrome\/(\d+)/.exec(userAgent || '')
+    const ver = m ? m[1] : '120'
+    userAgentBrands = [
+      { brand: 'Not A(Brand', version: '99' },
+      { brand: 'Chromium', version: ver },
+      { brand: 'Google Chrome', version: ver }
+    ]
+  } catch {}
+
   return {
     locale,
     timezoneId,
     languages,
     platform,
+    uaPlatform,
     hardwareConcurrency,
     deviceMemory,
     vendor: 'Google Inc.',
     renderer: 'ANGLE (Apple, Apple M2, Metal)',
+    productSub: '20030107',
+    maxTouchPoints: 0,
     noiseCanvas: true,
     noiseWebGL: true,
     spoofPlugins: true,
+    audioNoise: true,
+    connection: { effectiveType: '4g', rtt: 50, downlink: 10, saveData: false },
     userAgent,
+    userAgentBrands,
     webrtcPolicy: 'disable_non_proxied_udp'
   }
 }
 
 // 获取所有配置文件
+// 获取机器码
+app.get('/api/hwid', (req, res) => {
+  try {
+    const hwid = computeHWID()
+    res.json({ ok: true, hwid })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) })
+  }
+})
+
 app.get('/api/profiles', (req, res) => {
   res.json(readProfiles())
 })
@@ -252,7 +389,7 @@ app.post('/api/profiles', async (req, res) => {
   if (id) {
     const idx = list.findIndex(p => p.id === id)
     if (idx === -1) return res.status(404).json({ error: 'profile not found' })
-    list[idx] = { ...list[idx], name, proxy }
+    list[idx] = { ...list[idx], name, proxy, preferred: preferred ?? list[idx].preferred }
     writeProfiles(list)
     return res.json(list[idx])
   }
@@ -370,7 +507,7 @@ app.post('/api/test-proxy', async (req, res) => {
   if (!host || !port) return res.status(400).json({ ok: false, error: '缺少 host/port' })
   const destH = destHost || 'www.douyin.com'
   const destP = Number(destPort || 443)
-  const timeout = Number(timeoutMs || 6000)
+  const timeout = Number(timeoutMs || 15000)
 
   function mapRep(rep) {
     const map = {
@@ -480,6 +617,14 @@ app.post('/api/test-proxy', async (req, res) => {
   }
 })
 
+// 会话网络诊断日志（最近 200 条）
+app.get('/api/profiles/:id/net-logs', (req, res) => {
+  const { id } = req.params
+  const sess = sessions[id]
+  if (!sess) return res.status(400).json({ ok: false, error: 'session not running' })
+  res.json({ ok: true, logs: sess.netLogs || [] })
+})
+
 // 导出 cookies（按域）
 app.get('/api/profiles/:id/cookies', async (req, res) => {
   const { id } = req.params
@@ -577,73 +722,229 @@ app.post('/api/import-profiles', (req, res) => {
   res.json({ ok: true, count: merged.length })
 })
 
-// 一键导出到文件夹（复制 userDataDir 到 data/exports/xxx）
-app.get('/api/profiles/:id/export-folder', (req, res) => {
-  const { id } = req.params
-  const profile = readProfiles().find(p => p.id === id)
-  if (!profile) return res.status(404).json({ error: 'profile not found' })
+// 仅弹窗选择一个目录并返回路径，用于批量导出根目录选择
+app.get('/api/choose-folder', async (req, res) => {
   try {
-    const safeName = (profile.name || 'profile').replace(/[^a-zA-Z0-9_-]+/g, '_')
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const dest = path.join(exportRoot, `${safeName}-${id}-${stamp}`)
-    fs.cpSync(profile.userDataDir, dest, { recursive: true })
+    const dir = await chooseFolderViaOS('请选择批量导出位置')
+    if (!dir) return res.status(412).json({ error: 'no selection', code: 'NO_SELECTION' })
+    res.json({ ok: true, path: dir })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// 导出当前配置文件列表为 JSON 到指定文件夹
+app.post('/api/export-profiles-to-folder', (req, res) => {
+  try {
+    const { targetDir, fileName } = req.body || {}
+    let destRoot = targetDir && typeof targetDir === 'string' ? targetDir : findDesktopDir()
+    if (!destRoot) return res.status(412).json({ error: 'no desktop path', code: 'DESKTOP_NOT_FOUND' })
+    if (!path.isAbsolute(destRoot)) destRoot = path.join(__dirname, destRoot)
+    fs.mkdirSync(destRoot, { recursive: true })
+    const name = (fileName && String(fileName).trim()) || 'profiles-list.json'
+    const cleanName = name.replace(/[^a-zA-Z0-9_.-]+/g, '_')
+    const payload = readProfiles().map(p => ({ id: p.id, name: p.name, proxy: p.proxy || null, createdAt: p.createdAt || null }))
+    const dest = path.join(destRoot, cleanName)
+    fs.writeFileSync(dest, JSON.stringify(payload, null, 2))
     res.json({ ok: true, path: dest })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
 })
 
-// 从文件夹导入（复制该文件夹到新建的 userDataDir）
-app.post('/api/profiles/import-folder', (req, res) => {
-  const { folderPath, name, proxy } = req.body || {}
-  if (!folderPath) return res.status(400).json({ error: 'folderPath required' })
-  const src = path.isAbsolute(folderPath) ? folderPath : path.join(__dirname, folderPath)
-  if (!fs.existsSync(src)) return res.status(400).json({ error: 'source folder not found' })
+// 一键导出到文件夹（默认桌面；若桌面不存在则弹窗选择）
+app.get('/api/profiles/:id/export-folder', async (req, res) => {
+  const { id } = req.params
+  const profile = readProfiles().find(p => p.id === id)
+  if (!profile) return res.status(404).json({ error: 'profile not found' })
   try {
-    const id = uuidv4()
-    const srcBase = path.basename(src)
-    const { dirName, userDataDir } = makeUniqueProfileDir(srcBase)
-    fs.mkdirSync(userDataDir, { recursive: true })
-    fs.cpSync(src, userDataDir, { recursive: true })
-    const list = readProfiles()
-    const profile = { id, name: name || srcBase, proxy: proxy || null, userDataDir, createdAt: Date.now() }
-    list.push(profile)
-    writeProfiles(list)
-    res.json(profile)
+    const force = String(req.query.force || '').toLowerCase()
+    const forceChoose = force === '1' || force === 'true'
+    let destRoot = null
+    if (forceChoose) {
+      destRoot = await chooseFolderViaOS('请选择导出位置')
+      if (!destRoot) return res.status(412).json({ error: 'no selection', code: 'NO_SELECTION' })
+    } else {
+      destRoot = findDesktopDir()
+      if (!destRoot) {
+        destRoot = await chooseFolderViaOS('未找到桌面目录，请选择导出位置')
+        if (!destRoot) return res.status(412).json({ error: 'no desktop path and no selection', code: 'DESKTOP_NOT_FOUND' })
+      }
+    }
+    fs.mkdirSync(destRoot, { recursive: true })
+    const cleanName = (profile.name || 'profile').replace(/[^a-zA-Z0-9_.-]+/g, '_')
+    let dest = path.join(destRoot, cleanName)
+    if (fs.existsSync(dest)) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      dest = path.join(destRoot, `${cleanName}-${stamp}`)
+    }
+    fs.cpSync(profile.userDataDir, dest, { recursive: true })
+    // 新规则：在导出命名的文件夹内写入 fingerprint.json 与 proxy.json
+    try {
+      if (profile.fingerprint) {
+        fs.writeFileSync(path.join(dest, 'fingerprint.json'), JSON.stringify(profile.fingerprint, null, 2))
+      }
+      if (profile.proxy) {
+        fs.writeFileSync(path.join(dest, 'proxy.json'), JSON.stringify(profile.proxy, null, 2))
+      }
+    } catch {}
+    res.json({ ok: true, path: dest })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
 })
 
-// 通过上传的文件列表导入为新配置（大目录可能受限于请求大小）
-app.post('/api/profiles/import-upload', bodyParser.json({ limit: '200mb' }), (req, res) => {
-  const { files, name, proxy } = req.body || {}
-  if (!Array.isArray(files) || files.length === 0) return res.status(400).json({ error: 'files required' })
+// 导出到用户指定的目标路径（服务器可访问的目录）
+app.post('/api/profiles/:id/export-folder', (req, res) => {
+  const { id } = req.params
+  const { targetDir, folderName } = req.body || {}
+  const profile = readProfiles().find(p => p.id === id)
+  if (!profile) return res.status(404).json({ error: 'profile not found' })
   try {
-    const id = uuidv4()
-    // 从第一个文件的相对路径中提取根目录名
-    const firstPath = String(files[0].path || '')
-    const safeFirst = firstPath.replace(/\\/g, '/').split('/').filter(seg => seg && seg !== '.' && seg !== '..')
-    const rootName = safeFirst.length > 1 ? safeFirst[0] : (safeFirst[0] || 'uploaded')
-    const { dirName, userDataDir } = makeUniqueProfileDir(rootName)
-    fs.mkdirSync(userDataDir, { recursive: true })
-    for (const f of files) {
-      const rel = String(f.path || '')
-      // 防止目录遍历
-      const safeRel = rel.replace(/\\/g, '/').split('/').filter(seg => seg && seg !== '.' && seg !== '..').join('/')
-      // 去除根目录名，避免重复嵌套
-      const parts = safeRel.split('/')
-      const inside = parts.length > 1 ? parts.slice(1).join('/') : parts[0]
-      const dest = path.join(userDataDir, inside)
-      fs.mkdirSync(path.dirname(dest), { recursive: true })
-      const buf = Buffer.from(f.base64, 'base64')
-      fs.writeFileSync(dest, buf)
+    // 目标根目录：若未指定则回退到桌面路径（存在才使用）
+    let destRoot = targetDir && typeof targetDir === 'string' ? targetDir : findDesktopDir()
+    if (!destRoot) return res.status(412).json({ error: 'no desktop path', code: 'DESKTOP_NOT_FOUND' })
+    // 相对路径则按服务器工作目录解析
+    if (!path.isAbsolute(destRoot)) destRoot = path.join(__dirname, destRoot)
+    // 创建目标根目录
+    fs.mkdirSync(destRoot, { recursive: true })
+    const defaultName = (folderName && String(folderName).trim()) || (profile.name || 'profile')
+    const cleanName = defaultName.replace(/[^a-zA-Z0-9_.-]+/g, '_')
+    let dest = path.join(destRoot, cleanName)
+    if (fs.existsSync(dest)) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      dest = path.join(destRoot, `${cleanName}-${stamp}`)
+    }
+    fs.cpSync(profile.userDataDir, dest, { recursive: true })
+    // 新规则：在导出命名的文件夹内写入 fingerprint.json 与 proxy.json
+    try {
+      if (profile.fingerprint) {
+        fs.writeFileSync(path.join(dest, 'fingerprint.json'), JSON.stringify(profile.fingerprint, null, 2))
+      }
+      if (profile.proxy) {
+        fs.writeFileSync(path.join(dest, 'proxy.json'), JSON.stringify(profile.proxy, null, 2))
+      }
+    } catch {}
+    res.json({ ok: true, path: dest })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// 导出为 zip 并流式下载
+app.get('/api/profiles/:id/export-zip', (req, res) => {
+  const { id } = req.params
+  const profile = readProfiles().find(p => p.id === id)
+  if (!profile) return res.status(404).json({ error: 'profile not found' })
+  try {
+    const safeName = (profile.name || 'profile').replace(/[^a-zA-Z0-9_-]+/g, '_')
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const zipName = `${safeName}-${id}-${stamp}.zip`
+    const outPath = path.join(exportRoot, zipName)
+    // 使用系统 zip 打包目录（包含根目录名）
+    const srcDir = profile.userDataDir
+    const parentDir = path.dirname(srcDir)
+    const baseName = path.basename(srcDir)
+    execSync(`zip -r -q "${outPath}" "${baseName}"`, { cwd: parentDir })
+    // 设置下载头并流式传输
+    res.setHeader('Content-Type', 'application/zip')
+    res.setHeader('Content-Disposition', `attachment; filename="${zipName}"`)
+    const stream = fs.createReadStream(outPath)
+    stream.on('error', err => res.status(500).end(`Stream error: ${err.message}`))
+    stream.pipe(res)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+
+// 已移除上传导入接口，推荐使用批量从文件夹导入（/api/import-profiles-from-folder）
+
+// 批量从文件夹导入配置：
+// - 若选择的是单个导出的配置目录（包含 webset-profile.json），则导入该目录
+// - 若选择的是包含多个导出目录的根文件夹，则导入其直接子目录中带有 webset-profile.json 的目录
+app.post('/api/import-profiles-from-folder', (req, res) => {
+  try {
+    const { sourceDir } = req.body || {}
+    if (!sourceDir) return res.status(400).json({ error: 'sourceDir required' })
+    if (!fs.existsSync(sourceDir) || !fs.statSync(sourceDir).isDirectory()) {
+      return res.status(400).json({ error: 'sourceDir invalid' })
+    }
+    // 新规则：以 fingerprint.json 或 proxy.json 的存在作为候选目录标记；为兼容旧导出同时支持 webset-profile.json
+    const hasMarker = (dir) => {
+      const fp = path.join(dir, 'fingerprint.json')
+      const px = path.join(dir, 'proxy.json')
+      const legacy = path.join(dir, 'webset-profile.json')
+      return fs.existsSync(fp) || fs.existsSync(px) || fs.existsSync(legacy)
+    }
+    // 可选：从根目录或其父目录读取批量导出的 profiles-list.json，以便在 meta 未包含代理时回填
+    let proxyMap = new Map()
+    const tryLoadProxyList = (dir) => {
+      const listPath = path.join(dir, 'profiles-list.json')
+      if (fs.existsSync(listPath)) {
+        try {
+          const arr = JSON.parse(fs.readFileSync(listPath, 'utf-8'))
+          if (Array.isArray(arr)) {
+            proxyMap = new Map(arr.map(it => [String(it.name || '').trim(), it.proxy || null]))
+          }
+        } catch {}
+      }
+    }
+    tryLoadProxyList(sourceDir)
+    let candidates = []
+    if (hasMarker(sourceDir)) {
+      candidates.push(sourceDir)
+      // 若直接选择的是单个配置目录，尝试在其父目录查找列表文件进行代理回填
+      tryLoadProxyList(path.dirname(sourceDir))
+    } else {
+      const entries = fs.readdirSync(sourceDir, { withFileTypes: true })
+      for (const ent of entries) {
+        if (ent.isDirectory()) {
+          const sub = path.join(sourceDir, ent.name)
+          if (hasMarker(sub)) candidates.push(sub)
+        }
+      }
+    }
+    if (candidates.length === 0) {
+      return res.json({ ok: true, importedCount: 0, imported: [], skippedCount: 0, skipped: [], note: 'no profiles found' })
     }
     const list = readProfiles()
-    const profile = { id, name: name || rootName, proxy: proxy || null, userDataDir, createdAt: Date.now() }
-    list.push(profile)
+    const imported = []
+    const skipped = []
+    for (const dir of candidates) {
+      try {
+        // 读取新规则下的 fingerprint/proxy 文件，保留旧格式兼容
+        let meta = null
+        const legacyMetaPath = path.join(dir, 'webset-profile.json')
+        try { if (fs.existsSync(legacyMetaPath)) meta = JSON.parse(fs.readFileSync(legacyMetaPath, 'utf-8')) } catch {}
+        const fpPath = path.join(dir, 'fingerprint.json')
+        const pxPath = path.join(dir, 'proxy.json')
+        let fingerprint = null
+        let proxy = null
+        try { if (fs.existsSync(fpPath)) fingerprint = JSON.parse(fs.readFileSync(fpPath, 'utf-8')) || null } catch {}
+        try { if (fs.existsSync(pxPath)) proxy = JSON.parse(fs.readFileSync(pxPath, 'utf-8')) || null } catch {}
+        if (!fingerprint && meta && meta.fingerprint) fingerprint = meta.fingerprint
+        if (!proxy && meta && meta.proxy) proxy = meta.proxy
+        const desiredName = path.basename(dir)
+        const id = uuidv4()
+        const { userDataDir } = makeUniqueProfileDir(desiredName)
+        fs.mkdirSync(userDataDir, { recursive: true })
+        fs.cpSync(dir, userDataDir, { recursive: true })
+        // 若未在文件中提供代理，则尝试批量导出列表 JSON 回填
+        if (!proxy && proxyMap.size > 0) {
+          const guessed = proxyMap.get(desiredName)
+          if (guessed && guessed.host && guessed.port) proxy = guessed
+        }
+        const createdAt = (meta && typeof meta.createdAt === 'number' ? meta.createdAt : Date.now())
+        const profile = { id, name: desiredName, proxy: proxy || null, userDataDir, createdAt, fingerprint }
+        list.push(profile)
+        imported.push({ id, name: desiredName, from: dir })
+      } catch (e) {
+        skipped.push({ path: dir, error: e.message })
+      }
+    }
     writeProfiles(list)
-    res.json(profile)
+    res.json({ ok: true, importedCount: imported.length, imported, skippedCount: skipped.length, skipped })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
