@@ -39,30 +39,17 @@ jobs:
           cd ui
           npm install --no-audit --no-fund
 
-      - name: Download Chromium into server/vendor (Windows)
+      - name: Install server deps
         shell: powershell
         run: |
           cd server
-          npm install --no-audit --no-fund
-          npm run vendor:chromium
+          npm ci
 
-      - name: Copy server into src-tauri (Windows)
+      - name: Bundle Chrome vendor (optional)
         shell: powershell
         run: |
-          if (Test-Path src-tauri/server) { Remove-Item -Recurse -Force src-tauri/server }
-          Copy-Item -Recurse -Force server src-tauri/
-
-      - name: Verify server copied (Windows)
-        shell: powershell
-        run: |
-          Write-Host "List src-tauri:"; Get-ChildItem src-tauri
-          Write-Host "List src-tauri/server (top 50):"; Get-ChildItem src-tauri/server | Select-Object -First 50
-
-      - name: Ensure server exists before build (Windows)
-        shell: powershell
-        run: |
-          if (!(Test-Path src-tauri/server)) { Copy-Item -Recurse -Force server src-tauri/ }
-          if (!(Test-Path src-tauri/server/.keep)) { New-Item -ItemType File src-tauri/server/.keep -Force | Out-Null }
+          cd server
+          npm run bundle:chrome || echo "bundle vendor skipped"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -136,25 +123,11 @@ jobs:
       - name: Install UI deps
         run: npm install --prefix ui
 
-      - name: Download Chromium into server/vendor (macOS)
-        run: |
-          npm install --prefix server --no-audit --no-fund
-          npm run vendor:chromium --prefix server
+      - name: Install server deps
+        run: npm ci --prefix server
 
-      - name: Copy server into src-tauri (macOS)
-        run: |
-          rm -rf src-tauri/server
-          cp -R server src-tauri/
-
-      - name: Verify server copied (macOS)
-        run: |
-          echo "List src-tauri:" && ls -la src-tauri
-          echo "List src-tauri/server (first 50):" && ls -la src-tauri/server | head -n 50
-
-      - name: Ensure server exists before build (macOS)
-        run: |
-          [ -d src-tauri/server ] || cp -R server src-tauri/
-          [ -f src-tauri/server/.keep ] || touch src-tauri/server/.keep
+      - name: Bundle Chrome vendor (optional)
+        run: npm run bundle:chrome --prefix server || echo "bundle vendor skipped"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
