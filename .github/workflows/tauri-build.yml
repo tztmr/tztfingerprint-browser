@@ -52,6 +52,12 @@ jobs:
           if (Test-Path src-tauri/server) { Remove-Item -Recurse -Force src-tauri/server }
           Copy-Item -Recurse -Force server src-tauri/
 
+      - name: Verify server copied (Windows)
+        shell: powershell
+        run: |
+          Write-Host "List src-tauri:"; Get-ChildItem src-tauri
+          Write-Host "List src-tauri/server (top 50):"; Get-ChildItem src-tauri/server | Select-Object -First 50
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -132,7 +138,12 @@ jobs:
       - name: Copy server into src-tauri (macOS)
         run: |
           rm -rf src-tauri/server
-          cp -R server src-tauri/server
+          cp -R server src-tauri/
+
+      - name: Verify server copied (macOS)
+        run: |
+          echo "List src-tauri:" && ls -la src-tauri
+          echo "List src-tauri/server (first 50):" && ls -la src-tauri/server | head -n 50
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
