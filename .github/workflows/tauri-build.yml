@@ -9,9 +9,11 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
+    permissions:
+      contents: write
     strategy:
       matrix:
-        target: [x86_64-pc-windows-msvc, i686-pc-windows-msvc]
+        target: [x86_64-pc-windows-msvc]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,6 +35,13 @@ jobs:
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
 
+      # 安装 Windows 打包所需依赖
+      - name: Install NSIS and WiX Toolset
+        shell: powershell
+        run: |
+          choco install nsis -y
+          choco install wixtoolset -y
+
       - name: Build Tauri app (Windows)
         uses: tauri-apps/tauri-action@v0
         env:
@@ -40,16 +49,23 @@ jobs:
         with:
           includeDebug: false
           args: --target ${{ matrix.target }}
+          tagName: app-v__VERSION__
+          releaseName: 'TZT 指纹浏览器 v__VERSION__'
+          releaseBody: '本次发布包含 Windows 与 macOS 双架构安装包。'
+          releaseDraft: false
+          prerelease: false
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
           name: tzt-windows-${{ matrix.target }}
           path: |
-            src-tauri/target/release/bundle/**
+            src-tauri/target/${{ matrix.target }}/release/bundle/**
 
   build-macos:
     runs-on: macos-latest
+    permissions:
+      contents: write
     strategy:
       matrix:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
@@ -81,10 +97,15 @@ jobs:
         with:
           includeDebug: false
           args: --target ${{ matrix.target }}
+          tagName: app-v__VERSION__
+          releaseName: 'TZT 指纹浏览器 v__VERSION__'
+          releaseBody: '本次发布包含 Windows 与 macOS 双架构安装包。'
+          releaseDraft: false
+          prerelease: false
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
           name: tzt-macos-${{ matrix.target }}
           path: |
-            src-tauri/target/release/bundle/**
+            src-tauri/target/${{ matrix.target }}/release/bundle/**
