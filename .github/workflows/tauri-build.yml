@@ -42,6 +42,23 @@ jobs:
           choco install nsis -y
           choco install wixtoolset -y
 
+      # 刷新环境并确保 NSIS 在 PATH 中
+      - name: Refresh PATH and verify NSIS
+        shell: powershell
+        run: |
+          Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1" -ErrorAction SilentlyContinue
+          refreshenv | Out-Null
+          $nsisPaths = @('C:\Program Files (x86)\NSIS', 'C:\Program Files\NSIS')
+          foreach ($p in $nsisPaths) {
+            if (Test-Path "$p\makensis.exe") {
+              $env:PATH = "$p;$env:PATH"
+              Write-Host "Added NSIS to PATH: $p"
+              break
+            }
+          }
+          Write-Host "makensis location:"; Get-Command makensis -ErrorAction SilentlyContinue | Format-List -Property Path
+          Write-Host "PATH length: $($env:PATH.Length)"
+
       - name: Build Tauri app (Windows)
         uses: tauri-apps/tauri-action@v0
         env:
