@@ -76,8 +76,8 @@ jobs:
         with:
           includeDebug: false
           args: --target ${{ matrix.target }}
-          tagName: app-v__VERSION__
-          releaseName: 'TZT 指纹浏览器 v__VERSION__'
+          tagName: app-v__VERSION__-${{ github.run_number }}
+          releaseName: 'TZT 指纹浏览器 v__VERSION__ build ${{ github.run_number }}'
           releaseBody: '本次发布包含 Windows 与 macOS 双架构安装包。'
           releaseDraft: false
           prerelease: false
@@ -124,8 +124,8 @@ jobs:
         with:
           includeDebug: false
           args: --target ${{ matrix.target }}
-          tagName: app-v__VERSION__
-          releaseName: 'TZT 指纹浏览器 v__VERSION__'
+          tagName: app-v__VERSION__-${{ github.run_number }}
+          releaseName: 'TZT 指纹浏览器 v__VERSION__ build ${{ github.run_number }}'
           releaseBody: '本次发布包含 Windows 与 macOS 双架构安装包。'
           releaseDraft: false
           prerelease: false

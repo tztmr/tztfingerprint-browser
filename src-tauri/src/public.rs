@@ -81,3 +81,8 @@ fn base64url_to_vec(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
 }
 
 // 注意：本文件不再定义 main()，命令在 src-tauri/src/main.rs 中注册
+
+#[tauri::command]
+pub fn get_hwid() -> Result<String, String> {
+    get().map_err(|e| format!("获取本机 HWID 失败: {}", e))
+}

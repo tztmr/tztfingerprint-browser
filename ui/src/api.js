@@ -147,6 +147,11 @@ export async function getChromeInfo() {
 
 // 获取机器码（HWID），用于证书绑定与校验显示
 export async function getHWID() {
+  if (isTauri) {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const hwid = await invoke('get_hwid')
+    return { ok: true, hwid }
+  }
   return fetchJson(`${API}/hwid`)
 }
 

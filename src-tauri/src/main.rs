@@ -72,7 +72,7 @@ fn spawn_backend(server_dir: &Path) -> Option<Child> {
 fn main() {
   tauri::Builder::default()
     .manage(ServerState(Mutex::new(None)))
-    .invoke_handler(tauri::generate_handler![public::verify_license])
+    .invoke_handler(tauri::generate_handler![public::verify_license, public::get_hwid])
     .setup(|app| {
       let server_dir = resolve_server_dir(app);
       if let Some(vendor_browser) = find_vendor_browser(&server_dir) {
