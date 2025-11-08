@@ -61,6 +61,8 @@ fn spawn_backend(server_dir: &Path) -> Option<Child> {
   let mut cmd = Command::new("node");
   cmd.current_dir(server_dir);
   cmd.arg("index.js");
+  // 默认使用 puppeteer-core 驱动
+  cmd.env("USE_PUPPETEER", "1");
   // inherit env; CHROME_PATH set by caller when available
   // optional: set PORT if you want override
   match cmd.spawn() {

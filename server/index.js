@@ -9,7 +9,27 @@ import crypto from 'crypto'
 import dns from 'dns/promises'
 import { v4 as uuidv4 } from 'uuid'
 // 使用 CDP + 本地 SOCKS5 转发器支持用户名/密码代理
-import { openSession, closeSession, sessions, getContext, getChromeInfo } from './lib/cdp.js'
+// 根据环境变量切换驱动：USE_PUPPETEER=1 使用 puppeteer-core；否则使用 CDP
+let usePuppeteer = false
+try { usePuppeteer = String(process.env.USE_PUPPETEER || '').trim() === '1' } catch {}
+let openSession, closeSession, sessions, getContext, getChromeInfo
+if (usePuppeteer) {
+  const mod = await import('./lib/puppeteer-driver.js')
+  openSession = mod.openSession
+  closeSession = mod.closeSession
+  sessions = mod.sessions
+  getContext = mod.getContext
+  getChromeInfo = mod.getChromeInfo
+  console.log('[server] Using puppeteer-core driver')
+} else {
+  const mod = await import('./lib/cdp.js')
+  openSession = mod.openSession
+  closeSession = mod.closeSession
+  sessions = mod.sessions
+  getContext = mod.getContext
+  getChromeInfo = mod.getChromeInfo
+  console.log('[server] Using CDP driver')
+}
 import { execSync, execFile } from 'child_process'
 import net from 'net'
 
