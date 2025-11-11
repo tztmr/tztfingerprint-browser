@@ -199,8 +199,8 @@ function findLocalChrome() {
       '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser'
     )
   } else if (platform === 'win32') {
-    const pf = 'C:/Program Files'
-    const pfx = 'C:/Program Files (x86)'
+    const pf = process.env["PROGRAMFILES"] || 'C:\\Program Files'
+    const pfx = process.env["PROGRAMFILES(X86)"] || 'C:\\Program Files (x86)'
     const local = process.env.LOCALAPPDATA || (process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'AppData', 'Local') : 'C:/Users/Default/AppData/Local')
     candidates.push(
       path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'),
@@ -275,21 +275,29 @@ export async function openSession(profile, initialUrl = null) {
     return {}
   })()
   const fpMerged = { ...fpRaw, ...stealthPrefs }
-  const fp = { ...fpMerged, userAgent: fpMerged.userAgent && fpMerged.userAgent.includes('HeadlessChrome/') ? fpMerged.userAgent.replace('HeadlessChrome/', 'Chrome/') : fpMerged.userAgent }
-  const flags = [
-    `--user-data-dir=${profile.userDataDir}`,
-    `--lang=${fp.locale}`,
-    `--force-webrtc-ip-handling-policy=${fp.webrtcPolicy}`,
-    '--disable-quic',
-    '--test-type',
-    '--disable-infobars',
-    '--disable-blink-features=AutomationControlled',
-    '--disable-features=AutomationControlled',
-    '--disable-extensions',
-    '--proxy-bypass-list=<-loopback>',
-    '--no-first-run',
-    '--no-default-browser-check'
-  ]
+ const fp = { ...fpMerged, userAgent: fpMerged.userAgent && fpMerged.userAgent.includes('HeadlessChrome/') ? fpMerged.userAgent.replace('HeadlessChrome/', 'Chrome/') : fpMerged.userAgent }
+ // Build launch flags with safer defaults. Avoid obsolete or highly-detectable flags.
+ const flags = [
+  `--user-data-dir=${profile.userDataDir}`,
+  `--lang=${fp.locale}`,
+  `--force-webrtc-ip-handling-policy=${fp.webrtcPolicy}`,
+  '--disable-quic',
+  '--no-first-run',
+  '--no-default-browser-check',
+  '--disable-background-networking',
+  '--disable-component-update',
+  '--disable-default-apps',
+  '--mute-audio'
+ ]
+ // Apply platform-specific flags only where they are supported
+ if (process.platform === 'linux') {
+  flags.push('--password-store=basic', '--use-mock-keychain')
+ }
+ // Stealth: disable AutomationControlled only when not explicitly set to 'light'
+ if (level !== 'light') {
+  flags.push('--disable-blink-features=AutomationControlled')
+ }
+
   // 可选：以 App 模式打开初始网址，避免工具栏与自动化横幅
   if (process.env.USE_APP_MODE === '1' && initialUrl && initialUrl !== 'about:blank') {
     flags.push(`--app=${initialUrl}`)
@@ -324,11 +332,15 @@ export async function openSession(profile, initialUrl = null) {
       if (pflag) flags.push(pflag)
     }
   }
-  const chosenPath = process.env.CHROME_PATH || findLocalChrome() || findBundledChrome()
+  // Prefer a valid env-provided path only if it actually exists; otherwise fall back to local/bundled detection
+  const envPath = process.env.CHROME_PATH
+  const chosen = (envPath && (() => { try { return fs.existsSync(envPath) } catch { return false } })())
+    ? envPath
+    : (findLocalChrome() || findBundledChrome())
   let chrome
   try {
     chrome = await chromeLauncher.launch({
-      chromePath: chosenPath,
+      chromePath: chosen,
       chromeFlags: flags
     })
   } catch (e) {
