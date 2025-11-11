@@ -2,6 +2,8 @@ use serde::Deserialize;
 use ed25519_dalek::{PublicKey, Signature, Verifier};
 use base64::{engine::general_purpose, Engine as _};
 use machine_uid::get;
+use sha2::{Digest, Sha256};
+use std::env;
 use std::time::SystemTime;
 
 // 固定内置的 base64 公钥（Ed25519 32 字节）
@@ -54,13 +56,17 @@ pub fn verify_license(args: VerifyArgs) -> Result<String, String> {
         return Err("license 已过期".into());
     }
 
-    // 获取本机 hwid
-    let my_hwid = get().map_err(|e| format!("获取本机 HWID 失败: {}", e))?;
+    // 获取本机 hwid（原始值）
+    let raw_hwid = get().map_err(|e| format!("获取本机 HWID 失败: {}", e))?;
+    let enc_hwid = encrypt_hwid(&raw_hwid);
 
     // 如果 payload 中带 boundHwid（发卡时绑定了设备），则必须匹配
     if let Some(bound) = payload.boundHwid {
-        if bound != my_hwid {
-            return Err(format!("设备不匹配（boundHwid != 本机），bound: {}, local: {}", bound, my_hwid));
+        if bound != enc_hwid {
+            return Err(format!(
+                "设备不匹配（boundHwid != 本机加密值），bound: {}, local(enc): {}",
+                bound, enc_hwid
+            ));
         }
     } else {
         // 如果没有 boundHwid，你可以选择：
@@ -84,5 +90,16 @@ fn base64url_to_vec(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
 
 #[tauri::command]
 pub fn get_hwid() -> Result<String, String> {
-    get().map_err(|e| format!("获取本机 HWID 失败: {}", e))
+    let raw = get().map_err(|e| format!("获取本机 HWID 失败: {}", e))?;
+    Ok(encrypt_hwid(&raw))
+}
+
+fn encrypt_hwid(raw: &str) -> String {
+    // 统一加密（哈希）算法：base64(SHA256(salt + ":" + raw))
+    // salt 默认 "TZT-HWID-V1"，也可通过环境变量 HWID_SALT 覆盖
+    let salt = env::var("HWID_SALT").unwrap_or_else(|_| "TZT-HWID-V1".to_string());
+    let mut hasher = Sha256::new();
+    hasher.update(format!("{}:{}", salt, raw));
+    let digest = hasher.finalize();
+    base64::engine::general_purpose::STANDARD.encode(digest)
 }

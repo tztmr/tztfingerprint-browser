@@ -399,9 +399,17 @@ async function generateFingerprint(reqProxy, preferred) {
 
 // 获取所有配置文件
 // 获取机器码
+// 统一加密（哈希）算法：base64(SHA256(salt + ":" + raw))，与 Tauri 端一致
+function encryptHWID(raw) {
+  const salt = process.env.HWID_SALT || 'TZT-HWID-V1'
+  const digest = crypto.createHash('sha256').update(`${salt}:${raw}`).digest()
+  return Buffer.from(digest).toString('base64')
+}
+
 app.get('/api/hwid', (req, res) => {
   try {
-    const hwid = computeHWID()
+    const raw = computeHWID()
+    const hwid = encryptHWID(raw)
     res.json({ ok: true, hwid })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message || String(e) })
