@@ -47,9 +47,10 @@ jobs:
 
       - name: Bundle Chrome vendor (optional)
         shell: powershell
+        continue-on-error: true
         run: |
           cd server
-          npm run bundle:chrome || echo "bundle vendor skipped"
+          npm run bundle:chrome
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -127,7 +128,8 @@ jobs:
         run: npm ci --prefix server
 
       - name: Bundle Chrome vendor (optional)
-        run: npm run bundle:chrome --prefix server || echo "bundle vendor skipped"
+        continue-on-error: true
+        run: npm run bundle:chrome --prefix server
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
