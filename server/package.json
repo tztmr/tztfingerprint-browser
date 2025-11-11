@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node index.js",
     "bundle:chrome": "node scripts/bundle-chrome.js",
-    "package:zip": "node scripts/build-and-zip.js"
+    "package:zip": "node scripts/build-and-zip.js",
+    "download:chromium": "node scripts/download-chromium.js --mirror=cn"
   },
   "dependencies": {
     "body-parser": "^1.20.2",
@@ -14,6 +15,7 @@
     "chrome-remote-interface": "^0.33.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
+    "extract-zip": "^2.0.1",
     "uuid": "^9.0.1"
   }
 }

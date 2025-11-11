@@ -1,0 +1,87 @@
+name: Release: Bump Version and Push
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      set_version:
+        description: "Explicit version to set (x.y.z). If empty, uses --inc"
+        required: false
+        type: string
+      inc:
+        description: "Increment type when set_version is empty"
+        required: false
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+jobs:
+  bump-and-push:
+    # Avoid infinite loop: skip when the triggering commit is the release commit
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release)') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Bump version
+        id: bump
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${{ inputs.set_version }}" ]]; then
+            VERSION=$(node scripts/bump-version.js --set=${{ inputs.set_version }})
+          else
+            VERSION=$(node scripts/bump-version.js --inc=${{ inputs.inc }})
+          fi
+          echo "New version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Configure Git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit changes if any
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$(git status --porcelain)" ]]; then
+            git add src-tauri/tauri.conf.json ui/package.json server/package.json || true
+            git commit -m "chore(release): v${{ steps.bump.outputs.version }}"
+            echo "committed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No changes to commit"
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push commit to current branch
+        if: steps.commit.outputs.committed == 'true'
+        run: |
+          git push origin HEAD:${{ github.ref_name }}
+
+      - name: Create tag and push
+        run: |
+          git tag v${{ steps.bump.outputs.version }} || true
+          git push origin v${{ steps.bump.outputs.version }} || true
+
+      - name: Summary
+        run: |
+          echo "Bumped and pushed version v${{ steps.bump.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "Tag: v${{ steps.bump.outputs.version }}" >> $GITHUB_STEP_SUMMARY

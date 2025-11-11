@@ -1,13 +1,27 @@
-name: Build Tauri Installers (Windows & macOS, No Publish)
+name: Build Tauri Installers (Unified)
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: "构建类型（lite: 轻量；chromium: 内置浏览器）"
+        required: false
+        type: choice
+        default: lite
+        options:
+          - lite
+          - chromium
+      mirror:
+        description: "Chromium 下载镜像（仅对 chromium 变体生效）"
+        required: false
+        type: string
 
 jobs:
-  build-windows:
+  build-lite-windows:
+    if: github.event_name == 'push' || inputs.variant == 'lite'
     runs-on: windows-latest
     permissions:
       contents: write
@@ -21,7 +35,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
 
       - name: Install root deps (CLI)
         run: npm ci
@@ -45,35 +59,26 @@ jobs:
           cd server
           npm ci
 
-      - name: Bundle Chrome vendor (optional)
-        shell: powershell
-        continue-on-error: true
-        run: |
-          cd server
-          npm run bundle:chrome
-
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
 
-      # 安装 Windows 打包所需依赖
       - name: Install NSIS and WiX Toolset
         shell: powershell
         run: |
           choco install nsis -y
           choco install wixtoolset -y
 
-      # 刷新环境并确保 NSIS 在 PATH 中
       - name: Refresh PATH and verify NSIS
         shell: powershell
         run: |
           Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1" -ErrorAction SilentlyContinue
           refreshenv | Out-Null
-          $nsisPaths = @('C:\Program Files (x86)\NSIS', 'C:\Program Files\NSIS')
+          $nsisPaths = @('C:\\Program Files (x86)\\NSIS', 'C:\\Program Files\\NSIS')
           foreach ($p in $nsisPaths) {
-            if (Test-Path "$p\makensis.exe") {
+            if (Test-Path "$p\\makensis.exe") {
               $env:PATH = "$p;$env:PATH"
               Write-Host "Added NSIS to PATH: $p"
               break
@@ -82,7 +87,7 @@ jobs:
           Write-Host "makensis location:"; Get-Command makensis -ErrorAction SilentlyContinue | Format-List -Property Path
           Write-Host "PATH length: $($env:PATH.Length)"
 
-      - name: Build Tauri app (Windows)
+      - name: Build Tauri app (Windows, lite)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -91,18 +96,19 @@ jobs:
           args: --target ${{ matrix.target }}
           tagName: app-v__VERSION__-${{ github.run_number }}
           releaseName: 'TZT 指纹浏览器 v__VERSION__ build ${{ github.run_number }}'
-          releaseBody: '本次发布包含 Windows 与 macOS 双架构安装包。'
+          releaseBody: '轻量版：不包含内置浏览器 vendor。'
           releaseDraft: false
           prerelease: false
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: tzt-windows-${{ matrix.target }}
+          name: tzt-lite-windows-${{ matrix.target }}
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/**
 
-  build-macos:
+  build-lite-macos:
+    if: github.event_name == 'push' || inputs.variant == 'lite'
     runs-on: macos-latest
     permissions:
       contents: write
@@ -127,17 +133,13 @@ jobs:
       - name: Install server deps
         run: npm ci --prefix server
 
-      - name: Bundle Chrome vendor (optional)
-        continue-on-error: true
-        run: npm run bundle:chrome --prefix server
-
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
 
-      - name: Build Tauri app (macOS)
+      - name: Build Tauri app (macOS, lite)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -146,13 +148,161 @@ jobs:
           args: --target ${{ matrix.target }}
           tagName: app-v__VERSION__-${{ github.run_number }}
           releaseName: 'TZT 指纹浏览器 v__VERSION__ build ${{ github.run_number }}'
-          releaseBody: '本次发布包含 Windows 与 macOS 双架构安装包。'
+          releaseBody: '轻量版：不包含内置浏览器 vendor。'
           releaseDraft: false
           prerelease: false
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: tzt-macos-${{ matrix.target }}
+          name: tzt-lite-macos-${{ matrix.target }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/**
+
+  build-chromium-windows:
+    if: github.event_name == 'workflow_dispatch' && inputs.variant == 'chromium'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        target: [x86_64-pc-windows-msvc]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install root deps (CLI)
+        run: npm ci
+
+      - name: Configure npm registry for UI (Windows)
+        shell: powershell
+        run: |
+          cd ui
+          npm config set registry https://registry.npmjs.org
+          npm config get registry
+
+      - name: Install UI deps
+        shell: powershell
+        run: |
+          cd ui
+          npm install --no-audit --no-fund
+
+      - name: Install server deps
+        shell: powershell
+        run: |
+          cd server
+          npm ci
+
+      - name: Download Chromium vendor
+        shell: powershell
+        run: |
+          cd server
+          node scripts/download-chromium.js --mirror=${{ inputs.mirror }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install NSIS and WiX Toolset
+        shell: powershell
+        run: |
+          choco install nsis -y
+          choco install wixtoolset -y
+
+      - name: Refresh PATH and verify NSIS
+        shell: powershell
+        run: |
+          Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1" -ErrorAction SilentlyContinue
+          refreshenv | Out-Null
+          $nsisPaths = @('C:\\Program Files (x86)\\NSIS', 'C:\\Program Files\\NSIS')
+          foreach ($p in $nsisPaths) {
+            if (Test-Path "$p\\makensis.exe") {
+              $env:PATH = "$p;$env:PATH"
+              Write-Host "Added NSIS to PATH: $p"
+              break
+            }
+          }
+          Write-Host "makensis location:"; Get-Command makensis -ErrorAction SilentlyContinue | Format-List -Property Path
+          Write-Host "PATH length: $($env:PATH.Length)"
+
+      - name: Build Tauri app (Windows, chromium)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          includeDebug: false
+          args: --target ${{ matrix.target }}
+          tagName: app-v__VERSION__-${{ github.run_number }}
+          releaseName: 'TZT 指纹浏览器 v__VERSION__ build ${{ github.run_number }}'
+          releaseBody: '内置版：包含 server/vendor 的 Chromium。'
+          releaseDraft: false
+          prerelease: false
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: tzt-with-chromium-windows-${{ matrix.target }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/**
+
+  build-chromium-macos:
+    if: github.event_name == 'workflow_dispatch' && inputs.variant == 'chromium'
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install root deps (CLI)
+        run: npm ci
+
+      - name: Install UI deps
+        run: npm install --prefix ui
+
+      - name: Install server deps
+        run: npm ci --prefix server
+
+      - name: Download Chromium vendor
+        run: node server/scripts/download-chromium.js --mirror=${{ inputs.mirror }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build Tauri app (macOS, chromium)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          includeDebug: false
+          args: --target ${{ matrix.target }}
+          tagName: app-v__VERSION__-${{ github.run_number }}
+          releaseName: 'TZT 指纹浏览器 v__VERSION__ build ${{ github.run_number }}'
+          releaseBody: '内置版：包含 server/vendor 的 Chromium。'
+          releaseDraft: false
+          prerelease: false
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: tzt-with-chromium-macos-${{ matrix.target }}
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/**
