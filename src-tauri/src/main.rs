@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{env, path::{PathBuf, Path}, process::{Child, Command}, sync::Mutex, net::TcpStream};
+use std::{env, path::{PathBuf, Path}, process::{Child, Command}, sync::Mutex, net::TcpStream, io::Write, thread, time::Duration};
 use tauri::{Manager, WindowEvent};
 use tauri::path::BaseDirectory;
 mod public;
@@ -61,8 +61,7 @@ fn spawn_backend(server_dir: &Path) -> Option<Child> {
   let mut cmd = Command::new("node");
   cmd.current_dir(server_dir);
   cmd.arg("index.js");
-  // 默认使用 puppeteer-core 驱动
-  cmd.env("USE_PUPPETEER", "1");
+  // 统一使用 CDP 驱动（不再支持 puppeteer-core），无需设置 USE_PUPPETEER
   // inherit env; CHROME_PATH set by caller when available
   // optional: set PORT if you want override
   match cmd.spawn() {
@@ -91,9 +90,19 @@ fn main() {
     })
     .on_window_event(|win, e| {
       if let WindowEvent::CloseRequested { api, .. } = e {
-        // graceful shutdown backend
+        // graceful shutdown: ask backend to close all sessions, then kill child
         let app = win.app_handle();
         let st = app.state::<ServerState>();
+        // Try to POST /api/stop-all
+        {
+          let port = env::var("PORT").ok().and_then(|p| p.parse::<u16>().ok()).unwrap_or(4000);
+          if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
+            let req = format!("POST /api/stop-all HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", port);
+            let _ = stream.write_all(req.as_bytes());
+          }
+          // small delay to allow backend cleanup
+          thread::sleep(Duration::from_millis(200));
+        }
         if let Some(mut child) = st.0.lock().unwrap().take() {
           let _ = child.kill();
         }

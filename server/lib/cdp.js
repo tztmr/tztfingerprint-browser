@@ -263,7 +263,7 @@ function findBundledChrome() {
   return null
 }
 
-export async function openSession(profile) {
+export async function openSession(profile, initialUrl = null) {
   if (sessions[profile.id]) return sessions[profile.id]
   const fpRaw = { ...defaultFingerprint, ...(profile.fingerprint || {}) }
   // Apply stealth level overrides without changing persisted fingerprint surface
@@ -281,25 +281,48 @@ export async function openSession(profile) {
     `--lang=${fp.locale}`,
     `--force-webrtc-ip-handling-policy=${fp.webrtcPolicy}`,
     '--disable-quic',
+    '--test-type',
+    '--disable-infobars',
+    '--disable-blink-features=AutomationControlled',
+    '--disable-features=AutomationControlled',
+    '--disable-extensions',
     '--proxy-bypass-list=<-loopback>',
     '--no-first-run',
     '--no-default-browser-check'
   ]
-  // 始终通过本地 SOCKS5 转发器桥接到上游代理，确保支持鉴权且兼容各浏览器
+  // 可选：以 App 模式打开初始网址，避免工具栏与自动化横幅
+  if (process.env.USE_APP_MODE === '1' && initialUrl && initialUrl !== 'about:blank') {
+    flags.push(`--app=${initialUrl}`)
+  }
+  try {
+    if (String(process.env.SANITIZE_PROFILE || '').trim() === '1') {
+      const extDir = path.join(profile.userDataDir, 'Default', 'Extensions')
+      if (fs.existsSync(extDir)) {
+        fs.rmSync(extDir, { recursive: true, force: true })
+      }
+    }
+  } catch {}
+  // 与 Chrome 一致：无认证直连；有认证时使用本地转发器嵌入凭据
   let forwarder = null
   const { proxy } = profile || {}
   if (proxy && proxy.host && proxy.port) {
-    forwarder = await createSocks5Forwarder({
-      upstreamHost: proxy.host,
-      upstreamPort: Number(proxy.port),
-      username: proxy.username || null,
-      password: proxy.password || null,
-      bindHost: '127.0.0.1',
-      bindPort: 0,
-      timeoutMs: 15000
-    })
-    const pflag = proxyFlagFromHostPort('127.0.0.1', forwarder.port)
-    if (pflag) flags.push(pflag)
+    const needAuth = Boolean(proxy.username) || Boolean(proxy.password)
+    if (needAuth) {
+      forwarder = await createSocks5Forwarder({
+        upstreamHost: proxy.host,
+        upstreamPort: Number(proxy.port),
+        username: proxy.username || null,
+        password: proxy.password || null,
+        bindHost: '127.0.0.1',
+        bindPort: 0,
+        timeoutMs: 15000
+      })
+      const pflag = proxyFlagFromHostPort('127.0.0.1', forwarder.port)
+      if (pflag) flags.push(pflag)
+    } else {
+      const pflag = proxyFlagFromHostPort(proxy.host, Number(proxy.port))
+      if (pflag) flags.push(pflag)
+    }
   }
   const chosenPath = process.env.CHROME_PATH || findLocalChrome() || findBundledChrome()
   let chrome
@@ -325,12 +348,18 @@ function makeContext(id) {
       if (!sess) throw new Error('session not running')
       const { port, fingerprint } = sess
       const browser = await CDP({ port })
-      // Prefer reusing the default startup tab (about:blank / chrome new tab)
+      // Prefer reuse existing page matching initialUrl, otherwise the default startup tab
       let targetId = null
       try {
         const { targetInfos } = await browser.Target.getTargets()
-        const boot = (targetInfos || []).find(t => t.type === 'page' && (t.url === 'about:blank' || t.url.startsWith('chrome://')))
-        if (boot) targetId = boot.targetId
+        if (initialUrl && initialUrl !== 'about:blank') {
+          const match = (targetInfos || []).find(t => t.type === 'page' && t.url === initialUrl)
+          if (match) targetId = match.targetId
+        }
+        if (!targetId) {
+          const boot = (targetInfos || []).find(t => t.type === 'page' && (t.url === 'about:blank' || t.url.startsWith('chrome://')))
+          if (boot) targetId = boot.targetId
+        }
       } catch {}
       if (!targetId) {
         const created = await browser.Target.createTarget({ url: initialUrl || 'about:blank' })
@@ -385,6 +414,16 @@ function makeContext(id) {
         try {
           await page.Page.navigate({ url: initialUrl })
           await page.Page.loadEventFired()
+          // Clean up stray about:blank tabs if any remain after navigation
+          try {
+            const { targetInfos } = await browser.Target.getTargets()
+            const blanks = (targetInfos || []).filter(t => {
+              return t.type === 'page' && (t.url === 'about:blank' || String(t.url || '').startsWith('chrome://')) && t.targetId !== targetId
+            })
+            for (const t of blanks) {
+              try { await page.Target.closeTarget({ targetId: t.targetId }) } catch {}
+            }
+          } catch {}
         } catch {}
       }
       return {

@@ -8,28 +8,14 @@ import os from 'os'
 import crypto from 'crypto'
 import dns from 'dns/promises'
 import { v4 as uuidv4 } from 'uuid'
-// 使用 CDP + 本地 SOCKS5 转发器支持用户名/密码代理
-// 根据环境变量切换驱动：USE_PUPPETEER=1 使用 puppeteer-core；否则使用 CDP
-let usePuppeteer = false
-try { usePuppeteer = String(process.env.USE_PUPPETEER || '').trim() === '1' } catch {}
-let openSession, closeSession, sessions, getContext, getChromeInfo
-if (usePuppeteer) {
-  const mod = await import('./lib/puppeteer-driver.js')
-  openSession = mod.openSession
-  closeSession = mod.closeSession
-  sessions = mod.sessions
-  getContext = mod.getContext
-  getChromeInfo = mod.getChromeInfo
-  console.log('[server] Using puppeteer-core driver')
-} else {
-  const mod = await import('./lib/cdp.js')
-  openSession = mod.openSession
-  closeSession = mod.closeSession
-  sessions = mod.sessions
-  getContext = mod.getContext
-  getChromeInfo = mod.getChromeInfo
-  console.log('[server] Using CDP driver')
-}
+// 统一使用 CDP 驱动（不再支持 puppeteer-core）
+const mod = await import('./lib/cdp.js')
+const openSession = mod.openSession
+const closeSession = mod.closeSession
+const sessions = mod.sessions
+const getContext = mod.getContext
+const getChromeInfo = mod.getChromeInfo
+console.log('[server] Using CDP driver (puppeteer disabled)')
 import { execSync, execFile } from 'child_process'
 import net from 'net'
 
@@ -119,6 +105,30 @@ function chooseFolderViaOS(promptText = '请选择导出目录') {
 function writeProfiles(list) {
 fs.writeFileSync(profilesFile, JSON.stringify(list, null, 2))
 }
+
+// 优雅关闭：收到进程信号时，尝试关闭所有会话与遗留浏览器进程
+async function gracefulShutdown() {
+  try {
+    const ids = Object.keys(sessions || {})
+    for (const id of ids) { try { await closeSession(id) } catch {} }
+    // 兜底：杀掉仍绑定到本项目 profiles 的 Chrome 进程
+    try {
+      const profilesRoot = path.join(__dirname, 'data', 'profiles')
+      const out = execSync(`pgrep -fl "user-data-dir=${profilesRoot}" || true`, { encoding: 'utf8' })
+      const lines = (out || '').split('\n').map(s => s.trim()).filter(Boolean)
+      for (const line of lines) {
+        const pidStr = line.split(' ')[0]
+        const pid = Number(pidStr)
+        if (!Number.isNaN(pid)) {
+          try { process.kill(pid, 'SIGKILL') } catch {}
+        }
+      }
+    } catch {}
+  } catch {}
+}
+
+process.on('SIGINT', async () => { await gracefulShutdown(); process.exit(0) })
+process.on('SIGTERM', async () => { await gracefulShutdown(); process.exit(0) })
 
 function safeDirName(name) {
   const base = String(name || 'profile').trim()
@@ -459,7 +469,7 @@ app.post('/api/profiles/:id/start', async (req, res) => {
   const profile = readProfiles().find(p => p.id === id)
   if (!profile) return res.status(404).json({ error: 'profile not found' })
   try {
-    const ctx = await openSession(profile)
+    const ctx = await openSession(profile, startUrl || null)
     const page = await ctx.newPage(startUrl || 'about:blank')
     res.json({ ok: true })
   } catch (e) {

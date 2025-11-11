@@ -1,68 +1,144 @@
 :root {
+  --bg: #0f1320;
+  --text: #0f1320; /* default will be overridden by theme */
+  --muted: #9aa3b2;
+  --card: #151a2c;
+  --border: #222a3f;
+  --accent: #6ea8fe; /* blue default */
+  --accent-contrast: #0b1b39;
+  --btn: #1b233a;
+  --btn-hover: #243057;
+
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
+/* 明确的主题切换：dark / light */
+[data-theme="dark"] {
+  --bg: #0f1320;
+  --text: #e6e8ee;
+  --muted: #9aa3b2;
+  --card: #151a2c;
+  --border: #222a3f;
+  --btn: #1b233a;
+  --btn-hover: #243057;
 }
 
-body {
+[data-theme="light"] {
+  --bg: #ffffff;
+  --text: #111111;
+  --muted: #4b5563;
+  --card: #ffffff;
+  --border: #e5e7eb;
+  --btn: #f3f4f6; /* 按钮浅灰 */
+  --btn-hover: #e5e7eb;
+}
+
+[data-accent="teal"] { --accent: #38b2a6; --accent-contrast: #0c2f2b; }
+[data-accent="purple"] { --accent: #9a77ff; --accent-contrast: #220d47; }
+[data-accent="orange"] { --accent: #ff8a3d; --accent-contrast: #2a160a; }
+
+html, body {
   margin: 0;
-  display: flex;
-  place-items: center;
   min-width: 320px;
   min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
 }
 
+#root {
+  width: 100%;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover { opacity: 0.9; }
+
 h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+  font-size: 2rem;
+  margin: 0 0 8px 0;
+}
+.app-title {
+  background: linear-gradient(90deg, var(--accent), #7dd3fc);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
 }
 
 button {
   border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
+  border: 1px solid var(--border);
+  padding: 0.5em 1em;
+  font-size: 0.95em;
   font-weight: 500;
   font-family: inherit;
-  background-color: #1a1a1a;
+  background-color: var(--btn);
+  color: var(--text);
   cursor: pointer;
-  transition: border-color 0.25s;
+  transition: background-color 0.2s, border-color 0.2s, box-shadow 0.2s;
 }
-button:hover {
-  border-color: #646cff;
+button:hover { background-color: var(--btn-hover); border-color: var(--accent); }
+button:focus { outline: none; box-shadow: 0 0 0 3px var(--accent-contrast); }
+button[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+input, select, textarea {
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
 }
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+input::placeholder, textarea::placeholder { color: var(--muted); }
+select { appearance: none; }
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-contrast);
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+label { color: var(--muted); }
+code { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; }
+
+.app-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 16px 0;
 }
+.app-toolbar .swatch {
+  width: 18px; height: 18px; border-radius: 9999px; border: 1px solid var(--border);
+  display: inline-block; cursor: pointer;
+}
+.swatch.blue { background: #6ea8fe; }
+.swatch.teal { background: #38b2a6; }
+.swatch.purple { background: #9a77ff; }
+.swatch.orange { background: #ff8a3d; }
+.swatch.active { box-shadow: 0 0 0 2px var(--accent-contrast) inset; }
+
+/* 主题模式切换按钮基础样式 */
+.theme-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.theme-toggle button {
+  background: var(--btn);
+  border: none;
+  padding: 6px 10px;
+}
+.theme-toggle button.active { background: var(--btn-hover); }

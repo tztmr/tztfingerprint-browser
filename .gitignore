@@ -3,6 +3,8 @@ node_modules
 ui/dist/
 src-tauri/target/
 server/data/exports/
+server/data/profiles/
+server/vendor/
 
 # OS files
 .DS_Store

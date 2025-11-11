@@ -4,6 +4,22 @@ import { listProfiles, saveProfile, deleteProfile, startSession, stopSession, ex
 import { core as tauriCore } from '@tauri-apps/api'
 
 function App() {
+  // 主题色：持久化 + 注入至文档
+  const [accent, setAccent] = useState(() => {
+    try { return localStorage.getItem('accent') || 'blue' } catch { return 'blue' }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('accent', accent) } catch {}
+    try { document.documentElement.setAttribute('data-accent', accent) } catch {}
+  }, [accent])
+  // 主题模式：dark/light
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem('theme') || 'dark' } catch { return 'dark' }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('theme', theme) } catch {}
+    try { document.documentElement.setAttribute('data-theme', theme) } catch {}
+  }, [theme])
   const [profiles, setProfiles] = useState([])
   const [form, setForm] = useState({ name: '', proxy: { host: '', port: '', username: '', password: '' } })
   const [selected, setSelected] = useState(null)
@@ -714,7 +730,19 @@ function App() {
 
   return (
     <div style={{ padding: 20 }}>
-      <h1>TZT指纹浏览器配置管理</h1>
+      <div className="app-toolbar">
+        <span className="label">主题色：</span>
+        <button className="swatch-btn" onClick={() => setAccent('blue')}><span className={`swatch blue ${accent==='blue'?'active':''}`}></span></button>
+        <button className="swatch-btn" onClick={() => setAccent('teal')}><span className={`swatch teal ${accent==='teal'?'active':''}`}></span></button>
+        <button className="swatch-btn" onClick={() => setAccent('purple')}><span className={`swatch purple ${accent==='purple'?'active':''}`}></span></button>
+        <button className="swatch-btn" onClick={() => setAccent('orange')}><span className={`swatch orange ${accent==='orange'?'active':''}`}></span></button>
+        <span style={{ marginLeft: 12 }} className="label">主题：</span>
+        <div className="theme-toggle">
+          <button className={theme==='dark'?'active':''} onClick={() => setTheme('dark')}>深色</button>
+          <button className={theme==='light'?'active':''} onClick={() => setTheme('light')}>浅色</button>
+        </div>
+      </div>
+      <h1 className="app-title">TZT指纹浏览器配置管理</h1>
       <p>操作系统：Windows 与 macOS；支持 socks5 代理；批量管理账号的登录状态、cookies、session、localStorage、sessionStorage。</p>
       {chromeInfo && (
         <p style={{ color: '#333' }}>
