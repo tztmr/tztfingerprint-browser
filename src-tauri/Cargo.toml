@@ -19,3 +19,6 @@ sha2 = "0.10"
 
 [build-dependencies]
 tauri-build = { version = "2.0.0", features = [] }
+
+[target.i686-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

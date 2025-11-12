@@ -24,7 +24,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "dmg"],
+    "targets": ["nsis"],
     "resources": [
       "../server"
     ],

@@ -1,6 +1,7 @@
 {
   "scripts": {
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build:x86": "node scripts/build-x86.js"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.3"
