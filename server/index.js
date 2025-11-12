@@ -40,11 +40,14 @@ app.use((err, req, res, next) => {
 const dataDir = path.join(__dirname, 'data')
 const profilesFile = path.join(dataDir, 'profiles.json')
 const exportRoot = path.join(dataDir, 'exports')
+const browserPathFile = path.join(dataDir, 'browser-path.txt')
 
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true })
 if (!fs.existsSync(path.join(dataDir, 'profiles'))) fs.mkdirSync(path.join(dataDir, 'profiles'), { recursive: true })
 if (!fs.existsSync(profilesFile)) fs.writeFileSync(profilesFile, JSON.stringify([]))
 if (!fs.existsSync(exportRoot)) fs.mkdirSync(exportRoot, { recursive: true })
+// 预创建浏览器路径文件（为空即可），便于后续写入
+try { if (!fs.existsSync(browserPathFile)) fs.writeFileSync(browserPathFile, '') } catch {}
 
 function readProfiles() {
   return JSON.parse(fs.readFileSync(profilesFile, 'utf-8'))
@@ -102,8 +105,70 @@ function chooseFolderViaOS(promptText = '请选择导出目录') {
   })
 }
 
+// 弹出系统文件选择框（macOS 使用 osascript；Windows 使用 PowerShell）
+function chooseExecutableViaOS(promptText = '请选择浏览器可执行文件') {
+  return new Promise((resolve) => {
+    const platform = process.platform
+    if (platform === 'darwin') {
+      const script = `POSIX path of (choose file with prompt \"${String(promptText).replace(/"/g, '\\"')}\" default location path to applications folder)`
+      execFile('osascript', ['-e', script], { encoding: 'utf8' }, (err, stdout) => {
+        if (err) return resolve(null)
+        const out = (stdout || '').trim()
+        resolve(out || null)
+      })
+    } else if (platform === 'win32') {
+      const psScript = [
+        'Add-Type -AssemblyName System.Windows.Forms;',
+        '$f = New-Object System.Windows.Forms.OpenFileDialog;',
+        `$f.Title = "${String(promptText).replace(/"/g, '`"')}";`,
+        '$f.Filter = "Executable (*.exe)|*.exe|All files (*.*)|*.*";',
+        'if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.FileName }'
+      ].join(' ')
+      execFile('powershell', ['-NoProfile', '-Command', psScript], { encoding: 'utf8' }, (err, stdout) => {
+        if (err) return resolve(null)
+        const out = (stdout || '').trim()
+        resolve(out || null)
+      })
+    } else {
+      // 其他平台暂不支持原生弹窗
+      resolve(null)
+    }
+  })
+}
+
 function writeProfiles(list) {
 fs.writeFileSync(profilesFile, JSON.stringify(list, null, 2))
+}
+
+// 规范化浏览器可执行路径：支持传入目录（自动寻找常见二进制）或直接传入可执行文件
+function normalizeExecutable(inputPath) {
+  if (!inputPath) return null
+  try {
+    const p = path.resolve(String(inputPath))
+    if (!fs.existsSync(p)) return null
+    const stat = fs.statSync(p)
+    if (stat.isDirectory()) {
+      if (process.platform === 'darwin') {
+        const candidates = [
+          path.join(p, 'Contents', 'MacOS', 'Google Chrome'),
+          path.join(p, 'Contents', 'MacOS', 'Chromium'),
+          path.join(p, 'Contents', 'MacOS', 'Brave Browser'),
+          path.join(p, 'Contents', 'MacOS', 'Microsoft Edge')
+        ]
+        for (const c of candidates) { try { if (fs.existsSync(c)) return c } catch {} }
+      } else if (process.platform === 'win32') {
+        const candidates = ['chrome.exe', 'msedge.exe', 'brave.exe'].map(n => path.join(p, n))
+        for (const c of candidates) { try { if (fs.existsSync(c)) return c } catch {} }
+      } else {
+        const candidates = ['chrome', 'chromium', 'brave-browser', 'microsoft-edge'].map(n => path.join(p, n))
+        for (const c of candidates) { try { if (fs.existsSync(c)) return c } catch {} }
+      }
+      return null
+    }
+    return p
+  } catch {
+    return null
+  }
 }
 
 // 优雅关闭：收到进程信号时，尝试关闭所有会话与遗留浏览器进程
@@ -411,6 +476,22 @@ app.get('/api/hwid', (req, res) => {
     const raw = computeHWID()
     const hwid = encryptHWID(raw)
     res.json({ ok: true, hwid })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) })
+  }
+})
+
+// 保存浏览器可执行路径（开发/浏览器环境使用），server/lib/cdp.js 会读取该路径
+app.post('/api/browser-path', (req, res) => {
+  try {
+    const input = (req.body && req.body.path) ? String(req.body.path) : ''
+    if (!input) return res.status(400).json({ ok: false, error: '缺少 path' })
+    const chosen = normalizeExecutable(input)
+    if (!chosen || !fs.existsSync(chosen)) {
+      return res.status(400).json({ ok: false, error: '无效的浏览器路径，请选择可执行文件或包含可执行文件的目录' })
+    }
+    fs.writeFileSync(browserPathFile, chosen, 'utf8')
+    res.json({ ok: true, path: chosen })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message || String(e) })
   }
@@ -766,6 +847,21 @@ app.get('/api/choose-folder', async (req, res) => {
     const dir = await chooseFolderViaOS('请选择批量导出位置')
     if (!dir) return res.status(412).json({ error: 'no selection', code: 'NO_SELECTION' })
     res.json({ ok: true, path: dir })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// 仅弹窗选择一个可执行文件并返回路径，用于浏览器路径选择
+app.get('/api/choose-executable', async (req, res) => {
+  try {
+    const file = await chooseExecutableViaOS('请选择浏览器可执行文件')
+    if (!file) return res.status(412).json({ error: 'no selection', code: 'NO_SELECTION' })
+    const normalized = normalizeExecutable(file)
+    if (!normalized || !fs.existsSync(normalized)) {
+      return res.status(400).json({ error: '选择的文件无效或无法访问' })
+    }
+    res.json({ ok: true, path: normalized })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

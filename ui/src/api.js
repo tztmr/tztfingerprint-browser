@@ -173,11 +173,25 @@ export async function chooseFolder() {
   return fetchJson(`${API}/choose-folder`)
 }
 
+// 选择一个可执行文件（始终弹窗），返回 { ok, path }
+export async function chooseExecutable() {
+  return fetchJson(`${API}/choose-executable`)
+}
+
 // 将当前配置文件列表导出为 JSON 到指定文件夹
 export async function exportProfilesListToFolder(targetDir, fileName) {
   return fetchJson(`${API}/export-profiles-to-folder`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ targetDir, fileName })
+  })
+}
+
+// 保存浏览器可执行路径（开发/浏览器环境），写入 server/data/browser-path.txt
+export async function setBrowserPath(path) {
+  return fetchJson(`${API}/browser-path`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path })
   })
 }

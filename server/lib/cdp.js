@@ -3,6 +3,7 @@ import CDP from 'chrome-remote-interface'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { execSync } from 'child_process'
 import { fileURLToPath } from 'url'
 import { createSocks5Forwarder } from './socks5-forwarder.js'
 
@@ -228,6 +229,34 @@ function findLocalChrome() {
   for (const p of candidates) {
     try { if (fs.existsSync(p)) return p } catch {}
   }
+  if (platform === 'win32') {
+    const regKeys = [
+      'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe',
+      'HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe',
+      'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\msedge.exe',
+      'HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\msedge.exe',
+      'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\brave.exe',
+      'HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\brave.exe'
+    ]
+    for (const key of regKeys) {
+      try {
+        const out = execSync(`reg query "${key}" /ve`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString()
+        const line = out.split(/\r?\n/).find(l => /REG_/i.test(l)) || ''
+        const exe = line.trim().split(/\s{2,}/).pop()
+        if (exe && fs.existsSync(exe)) return exe
+      } catch {}
+    }
+    const whereCmds = ['where chrome', 'where msedge', 'where brave']
+    for (const cmd of whereCmds) {
+      try {
+        const out = execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] }).toString()
+        const paths = out.split(/\r?\n/).filter(Boolean)
+        for (const p of paths) {
+          try { if (fs.existsSync(p)) return p } catch {}
+        }
+      } catch {}
+    }
+  }
   return null
 }
 
@@ -260,6 +289,17 @@ function findBundledChrome() {
   for (const p of candidates) {
     try { if (fs.existsSync(p)) return p } catch {}
   }
+  return null
+}
+
+function getPersistedChromePath() {
+  try {
+    const persistFile = path.join(__dirname, '..', 'data', 'browser-path.txt')
+    if (fs.existsSync(persistFile)) {
+      const p = fs.readFileSync(persistFile, 'utf8').trim()
+      if (p && fs.existsSync(p)) return p
+    }
+  } catch {}
   return null
 }
 
@@ -334,9 +374,10 @@ export async function openSession(profile, initialUrl = null) {
   }
   // Prefer a valid env-provided path only if it actually exists; otherwise fall back to local/bundled detection
   const envPath = process.env.CHROME_PATH
+  const savedPath = getPersistedChromePath()
   const chosen = (envPath && (() => { try { return fs.existsSync(envPath) } catch { return false } })())
     ? envPath
-    : (findLocalChrome() || findBundledChrome())
+    : (savedPath || findLocalChrome() || findBundledChrome())
   let chrome
   try {
     chrome = await chromeLauncher.launch({
@@ -344,7 +385,7 @@ export async function openSession(profile, initialUrl = null) {
       chromeFlags: flags
     })
   } catch (e) {
-    const msg = '未找到可用的 Chrome/Chromium 可执行文件。请安装 Google Chrome 或 Chromium，或设置环境变量 CHROME_PATH 指向浏览器可执行文件（示例：/Applications/Google Chrome.app/Contents/MacOS/Google Chrome）。也支持 Edge/Brave 的可执行路径。'
+    const msg = '未找到可用的 Chrome/Chromium 可执行文件。请安装浏览器，或手动指定路径：\n1) 设置环境变量 CHROME_PATH 指向可执行文件；\n2) 在 server/data/browser-path.txt 写入绝对路径；\n也支持 Edge/Brave 的可执行路径。'
     throw new Error(msg)
   }
   const port = chrome.port

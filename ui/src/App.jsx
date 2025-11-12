@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import './App.css'
-import { listProfiles, saveProfile, deleteProfile, startSession, stopSession, exportCookies, importCookies, exportStorage, importStorage, exportProfileFolder, getChromeInfo, testProxy, getNetLogs, chooseFolder, importProfilesFromFolder, getHWID } from './api.js'
-import { core as tauriCore } from '@tauri-apps/api'
+import { listProfiles, saveProfile, deleteProfile, startSession, stopSession, exportCookies, importCookies, exportStorage, importStorage, exportProfileFolder, getChromeInfo, testProxy, getNetLogs, chooseFolder, chooseExecutable, importProfilesFromFolder, getHWID, setBrowserPath } from './api.js'
+import { core } from '@tauri-apps/api'
 
 function App() {
   // 主题色：持久化 + 注入至文档
@@ -14,7 +14,7 @@ function App() {
   }, [accent])
   // 主题模式：dark/light
   const [theme, setTheme] = useState(() => {
-    try { return localStorage.getItem('theme') || 'dark' } catch { return 'dark' }
+    try { return localStorage.getItem('theme') || 'light' } catch { return 'light' }
   })
   useEffect(() => {
     try { localStorage.setItem('theme', theme) } catch {}
@@ -94,6 +94,10 @@ function App() {
   const [proxyEditVisible, setProxyEditVisible] = useState(false)
   const [proxyEditProfile, setProxyEditProfile] = useState(null)
   const [proxyEditForm, setProxyEditForm] = useState({ host: '', port: '', username: '', password: '' })
+  // 重命名模态
+  const [nameEditVisible, setNameEditVisible] = useState(false)
+  const [nameEditTarget, setNameEditTarget] = useState(null)
+  const [nameEditValue, setNameEditValue] = useState('')
   // Toast 通知与确认对话
   const toastTimerRef = useRef(null)
   const [toast, setToast] = useState({ visible: false, text: '', type: 'info' })
@@ -123,6 +127,25 @@ function App() {
     return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
   }
 
+  async function chooseBrowserExecutable() {
+    try {
+      // 统一使用后端原生弹窗选择可执行文件，适用于 Web 和 Tauri
+      const resp = await chooseExecutable()
+      const path = resp && resp.path
+      if (!path) return showToast('未选择文件', 'error')
+      await setBrowserPath(path)
+      showToast('已保存浏览器路径', 'success')
+      getChromeInfo().then(setChromeInfo).catch(() => {})
+    } catch (e) {
+      const msg = (e?.message || String(e))
+      if (/NO_SELECTION|no selection/i.test(msg)) {
+        showToast('已取消选择', 'info')
+      } else {
+        showToast('保存失败：' + msg, 'error')
+      }
+    }
+  }
+
   // 辅助：解析证书 payload（仅用于展示，不代表验签通过）
   function parseLicensePayload(license) {
     try {
@@ -149,7 +172,7 @@ function App() {
     setCardErrorMsg('')
     try {
       if (isTauri()) {
-        await tauriCore.invoke('verify_license', { args: { license } })
+        await core.invoke('verify_license', { args: { license } })
         setCardStatus('valid')
         return
       }
@@ -329,6 +352,13 @@ function App() {
     setProxyEditVisible(true)
   }
 
+  function editName(p) {
+    if (!requireActivated()) return
+    setNameEditTarget(p || null)
+    setNameEditValue((p?.name || '').trim())
+    setNameEditVisible(true)
+  }
+
   async function saveProxyEdit() {
     if (!requireActivated()) return
     const p = proxyEditProfile
@@ -350,6 +380,25 @@ function App() {
   }
 
   function cancelProxyEdit() { setProxyEditVisible(false); setProxyEditProfile(null) }
+
+  async function saveNameEdit() {
+    if (!requireActivated()) return
+    const t = nameEditTarget
+    if (!t) { setNameEditVisible(false); return }
+    try {
+      const name = (nameEditValue || '').trim()
+      if (!name) { showToast('名称不能为空', 'error'); return }
+      const updated = await saveProfile({ id: t.id, name, proxy: t.proxy || null })
+      await refresh()
+      setSelected(updated)
+      setNameEditVisible(false)
+    } catch (e) {
+      setLogsModalText('重命名失败：' + e.message)
+      setLogsModalVisible(true)
+    }
+  }
+
+  function cancelNameEdit() { setNameEditVisible(false); setNameEditTarget(null); setNameEditValue('') }
 
   async function viewNetLogs(id) {
     if (!requireActivated()) return
@@ -746,11 +795,12 @@ function App() {
       <p>操作系统：Windows 与 macOS；支持 socks5 代理；批量管理账号的登录状态、cookies、session、localStorage、sessionStorage。</p>
       {chromeInfo && (
         <p style={{ color: '#333' }}>
-          Chrome 版本：{chromeInfo.version}（{chromeInfo.channel ? `channel=${chromeInfo.channel}` : chromeInfo.executablePath ? `path=${chromeInfo.executablePath}` : '默认'}）
+              Chrome 版本：{chromeInfo.version}（{chromeInfo.channel ? `channel=${chromeInfo.channel}` : chromeInfo.executablePath ? `path=${chromeInfo.executablePath}` : '默认'}）
+              <button style={{ marginLeft: 12 }} onClick={chooseBrowserExecutable}>选择浏览器路径</button>
         </p>
       )}
 
-      <div style={{ margin: '12px 0' }}>
+      <div className="row" style={{ margin: '12px 0', justifyContent: 'center' }}>
         <label style={{ marginRight: 8 }}>默认打开网站：</label>
         <select
           value={startUrl}
@@ -777,14 +827,24 @@ function App() {
         <span style={{ marginLeft: 8, color: cardStatus === 'valid' ? 'green' : cardStatus === 'invalid' ? 'red' : '#666' }}>
           {cardStatus === 'unknown' ? '未校验' : cardStatus === 'checking' ? '校验中…' : cardStatus === 'valid' ? '已激活' : '校验失败'}
         </span>
-        <span style={{ marginLeft: 16 }}>
-          机器码：<code style={{ background: '#f4f4f4', padding: '2px 6px', borderRadius: 4 }}>{hwid || '获取中…'}</code>
+        <span style={{ marginLeft: 16, display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <span>机器码：</span>
+          <code style={{ background: '#f4f4f4', padding: '2px 6px', borderRadius: 4, wordBreak: 'break-all', whiteSpace: 'normal' }}>{hwid || '获取中…'}</code>
+          <button
+            onClick={() => {
+              if (!hwid) return
+              try {
+                const sanitized = String(hwid).replace(/\s+/g, '')
+                navigator.clipboard?.writeText(sanitized)
+                showToast('已复制机器码', 'success')
+              } catch (e) {
+                showToast('复制失败：' + (e?.message || String(e)), 'error')
+              }
+            }}
+            disabled={!hwid}
+            style={{ padding: '2px 6px', fontSize: '0.9em' }}
+          >复制</button>
         </span>
-        <button
-          onClick={() => { if (hwid) { try { navigator.clipboard?.writeText(hwid) } catch {} } }}
-          disabled={!hwid}
-          style={{ marginLeft: 6, padding: '4px 8px' }}
-        >复制</button>
       </div>
       {!activated && (
         <div style={{ marginTop: 6, color: '#c33' }}>功能已锁定：请先校验卡密并激活后再使用下方功能。</div>
@@ -808,7 +868,7 @@ function App() {
               </div>
               {info && (
                 <div style={{ color: match ? 'green' : bound ? 'red' : '#666' }}>
-                  绑定 HWID：<code style={{ background: '#f4f4f4', padding: '2px 6px', borderRadius: 4 }}>{bound || '未绑定'}</code>
+                  绑定 HWID：<code style={{ background: '#f4f4f4', padding: '2px 6px', borderRadius: 4, wordBreak: 'break-all', whiteSpace: 'normal' }}>{bound || '未绑定'}</code>
                   <span style={{ marginLeft: 8 }}>
                     {bound ? (match ? '（与本机匹配）' : `（与本机不匹配：${hwid || '未知'}）`) : '（建议发卡绑定设备以保证唯一性）'}
                   </span>
@@ -926,6 +986,7 @@ function App() {
                 </div>
                 <div style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
                   <button title="选择当前配置" onClick={() => setSelected(p)}>选择</button>
+                  <button title="编辑文件名" onClick={() => editName(p)} disabled={!activated}>编辑文件名</button>
                   <button title="编辑代理设置" onClick={() => editProxy(p)} disabled={!activated}>编辑代理</button>
                   <button title="启动浏览器会话" onClick={() => start(p.id)} disabled={!activated}>启动会话</button>
                   <button title="关闭浏览器会话" onClick={() => stop(p.id)} disabled={!activated}>关闭会话</button>
@@ -985,6 +1046,22 @@ function App() {
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                 <button onClick={saveProxyEdit}>保存</button>
                 <button onClick={cancelProxyEdit}>取消</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 内置模态：编辑文件名 */}
+      {nameEditVisible && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000 }}>
+          <div style={{ width: 420, maxWidth: '90%', background: '#fff', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.2)', padding: 16 }}>
+            <h3 style={{ marginTop: 0 }}>编辑文件名</h3>
+            <div style={{ display: 'grid', gap: 8 }}>
+              <input placeholder="配置文件名" value={nameEditValue} onChange={e => setNameEditValue(e.target.value)} />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button onClick={saveNameEdit}>保存</button>
+                <button onClick={cancelNameEdit}>取消</button>
               </div>
             </div>
           </div>
