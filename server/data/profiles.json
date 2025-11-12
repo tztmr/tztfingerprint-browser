@@ -1,1 +1,57 @@
-[]
+[
+  {
+    "id": "f10bd600-8437-4413-bcbe-1016fda555b4",
+    "name": "123",
+    "proxy": {
+      "host": "1",
+      "port": 1,
+      "username": "1",
+      "password": "1"
+    },
+    "userDataDir": "C:\\Users\\Administrator\\Desktop\\tztfingerprint-browser\\server\\data\\profiles\\123",
+    "createdAt": 1762932264499,
+    "fingerprint": {
+      "locale": "zh-HK",
+      "timezoneId": "Asia/Hong_Kong",
+      "languages": [
+        "zh-Hant",
+        "zh-HK",
+        "zh"
+      ],
+      "platform": "Win32",
+      "uaPlatform": "Windows",
+      "hardwareConcurrency": 16,
+      "deviceMemory": 32,
+      "vendor": "Google Inc.",
+      "renderer": "ANGLE (Apple, Apple M2, Metal)",
+      "productSub": "20030107",
+      "maxTouchPoints": 0,
+      "noiseCanvas": true,
+      "noiseWebGL": true,
+      "spoofPlugins": true,
+      "audioNoise": true,
+      "connection": {
+        "effectiveType": "4g",
+        "rtt": 50,
+        "downlink": 10,
+        "saveData": false
+      },
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+      "userAgentBrands": [
+        {
+          "brand": "Not A(Brand",
+          "version": "99"
+        },
+        {
+          "brand": "Chromium",
+          "version": "142"
+        },
+        {
+          "brand": "Google Chrome",
+          "version": "142"
+        }
+      ],
+      "webrtcPolicy": "disable_non_proxied_udp"
+    }
+  }
+]

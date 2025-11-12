@@ -274,11 +274,17 @@ function App() {
     // 优先尝试从 URI 自动解析一次
     if (proxyUri) parseProxyFromUri(proxyUri)
     const proxy = form.proxy.host && form.proxy.port ? { ...form.proxy, port: Number(form.proxy.port) } : null
-    const p = await saveProfile({
-      name: form.name,
-      proxy,
-      preferred: { region: defaultRegion, language: defaultLanguage, timezoneId: defaultTimezone, stealth: defaultStealth }
-    })
+    let p
+    try {
+      p = await saveProfile({
+        name: form.name,
+        proxy,
+        preferred: { region: defaultRegion, language: defaultLanguage, timezoneId: defaultTimezone, stealth: defaultStealth }
+      })
+    } catch (e) {
+      showToast('创建失败：' + e.message, 'error')
+      return
+    }
     setForm({ name: '', proxy: { host: '', port: '', username: '', password: '' } })
     await refresh()
     setSelected(p)
@@ -793,12 +799,14 @@ function App() {
       </div>
       <h1 className="app-title">TZT指纹浏览器配置管理</h1>
       <p>操作系统：Windows 与 macOS；支持 socks5 代理；批量管理账号的登录状态、cookies、session、localStorage、sessionStorage。</p>
-      {chromeInfo && (
-        <p style={{ color: '#333' }}>
-              Chrome 版本：{chromeInfo.version}（{chromeInfo.channel ? `channel=${chromeInfo.channel}` : chromeInfo.executablePath ? `path=${chromeInfo.executablePath}` : '默认'}）
-              <button style={{ marginLeft: 12 }} onClick={chooseBrowserExecutable}>选择浏览器路径</button>
-        </p>
-      )}
+      <p style={{ color: '#333' }}>
+        {chromeInfo ? (
+          <>Chrome 版本：{chromeInfo.version}（{chromeInfo.channel ? `channel=${chromeInfo.channel}` : chromeInfo.executablePath ? `path=${chromeInfo.executablePath}` : '默认'}）</>
+        ) : (
+          <>未检测到 Chrome（可手动选择路径）</>
+        )}
+        <button style={{ marginLeft: 12 }} onClick={chooseBrowserExecutable}>选择浏览器路径</button>
+      </p>
 
       <div className="row" style={{ margin: '12px 0', justifyContent: 'center' }}>
         <label style={{ marginRight: 8 }}>默认打开网站：</label>

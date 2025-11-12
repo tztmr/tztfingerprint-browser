@@ -32,12 +32,11 @@ export async function listProfiles() {
 }
 
 export async function saveProfile(profile) {
-  const res = await fetch(`${API}/profiles`, {
+  return fetchJson(`${API}/profiles`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(profile)
   })
-  return res.json()
 }
 
 export async function deleteProfile(id) {

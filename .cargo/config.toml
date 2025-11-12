@@ -1,9 +1,2 @@
-# 使用 rsproxy.cn 提供的国内镜像服务
-[net]
-git-fetch-with-cli = true
-
-[source.crates-io]
-replace-with = "rsproxy"
-
-[source.rsproxy]
-registry = "sparse+https://rsproxy.cn/index/"
+[registries.crates-io]
+protocol = "sparse"

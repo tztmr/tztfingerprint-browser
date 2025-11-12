@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{env, path::{PathBuf, Path}, process::{Child, Command}, sync::Mutex, net::TcpStream, io::Write, thread, time::Duration};
+use std::{env, path::{PathBuf, Path}, process::{Child, Command, Stdio}, sync::Mutex, net::TcpStream, io::Write, thread, time::Duration};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use tauri::{Manager, WindowEvent};
 use tauri::path::BaseDirectory;
 mod public;
@@ -64,6 +66,10 @@ fn spawn_backend(server_dir: &Path) -> Option<Child> {
   // 统一使用 CDP 驱动（不再支持 puppeteer-core），无需设置 USE_PUPPETEER
   // inherit env; CHROME_PATH set by caller when available
   // optional: set PORT if you want override
+  // 隐藏后端控制台窗口，并断开标准输入输出，避免误关
+  cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+  #[cfg(target_os = "windows")]
+  { cmd.creation_flags(0x08000000); }
   match cmd.spawn() {
     Ok(child) => Some(child),
     Err(_) => None,

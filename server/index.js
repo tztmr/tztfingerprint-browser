@@ -515,7 +515,11 @@ app.post('/api/profiles', async (req, res) => {
   const newId = uuidv4()
   const desiredName = name || `Profile ${newId.slice(0, 8)}`
   const { dirName, userDataDir } = makeUniqueProfileDir(desiredName)
-  if (!fs.existsSync(userDataDir)) fs.mkdirSync(userDataDir, { recursive: true })
+  try {
+    if (!fs.existsSync(userDataDir)) fs.mkdirSync(userDataDir, { recursive: true })
+  } catch (e) {
+    return res.status(500).json({ error: `无法创建配置数据目录：${e.message}` })
+  }
   let fingerprint = null
   try { fingerprint = await generateFingerprint(proxy || null, preferred || null) } catch {}
   const profile = {

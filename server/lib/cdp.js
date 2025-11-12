@@ -202,7 +202,7 @@ function findLocalChrome() {
   } else if (platform === 'win32') {
     const pf = process.env["PROGRAMFILES"] || 'C:\\Program Files'
     const pfx = process.env["PROGRAMFILES(X86)"] || 'C:\\Program Files (x86)'
-    const local = process.env.LOCALAPPDATA || (process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'AppData', 'Local') : 'C:/Users/Default/AppData/Local')
+    const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
     candidates.push(
       path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'),
       path.join(pfx, 'Google', 'Chrome', 'Application', 'chrome.exe'),
@@ -318,7 +318,6 @@ export async function openSession(profile, initialUrl = null) {
  const fp = { ...fpMerged, userAgent: fpMerged.userAgent && fpMerged.userAgent.includes('HeadlessChrome/') ? fpMerged.userAgent.replace('HeadlessChrome/', 'Chrome/') : fpMerged.userAgent }
  // Build launch flags with safer defaults. Avoid obsolete or highly-detectable flags.
  const flags = [
-  `--user-data-dir=${profile.userDataDir}`,
   `--lang=${fp.locale}`,
   `--force-webrtc-ip-handling-policy=${fp.webrtcPolicy}`,
   '--disable-quic',
@@ -350,6 +349,7 @@ export async function openSession(profile, initialUrl = null) {
       }
     }
   } catch {}
+  try { if (!fs.existsSync(profile.userDataDir)) fs.mkdirSync(profile.userDataDir, { recursive: true }) } catch {}
   // 与 Chrome 一致：无认证直连；有认证时使用本地转发器嵌入凭据
   let forwarder = null
   const { proxy } = profile || {}
@@ -382,7 +382,8 @@ export async function openSession(profile, initialUrl = null) {
   try {
     chrome = await chromeLauncher.launch({
       chromePath: chosen,
-      chromeFlags: flags
+      chromeFlags: flags,
+      userDataDir: profile.userDataDir
     })
   } catch (e) {
     const msg = '未找到可用的 Chrome/Chromium 可执行文件。请安装浏览器，或手动指定路径：\n1) 设置环境变量 CHROME_PATH 指向可执行文件；\n2) 在 server/data/browser-path.txt 写入绝对路径；\n也支持 Edge/Brave 的可执行路径。'
@@ -533,7 +534,11 @@ export async function closeSession(id) {
 export async function getChromeInfo() {
   if (chromeInfoCache) return chromeInfoCache
   // Launch a temporary browser to read version (headless to avoid UI flicker)
-  const chosenPath = process.env.CHROME_PATH || findLocalChrome() || findBundledChrome()
+  const envPath = process.env.CHROME_PATH
+  const savedPath = getPersistedChromePath()
+  const chosenPath = (envPath && (() => { try { return fs.existsSync(envPath) } catch { return false } })())
+    ? envPath
+    : (savedPath || findLocalChrome() || findBundledChrome())
   let chrome
   try {
     chrome = await chromeLauncher.launch({ chromePath: chosenPath, chromeFlags: ['--headless=new', '--no-first-run', '--no-default-browser-check'] })
